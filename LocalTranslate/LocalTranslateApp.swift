@@ -62,16 +62,14 @@ private struct MenuBarContent: View {
                 ignoringOtherApps: true
             )
 
-            DispatchQueue
-                .main
+            DispatchQueue.main
                 .asyncAfter(
                     deadline:
                         .now() + 0.08
                 ) {
 
                     NSApp.activate(
-                        ignoringOtherApps:
-                            true
+                        ignoringOtherApps: true
                     )
 
                     let settingsWindow =
@@ -131,8 +129,6 @@ final class AppDelegate:
     private let viewModel =
         TranslationViewModel()
 
-    // 记录上一次真正应用到窗口的高度，
-    // 避免重复 resize。
     private var lastPanelHeight:
         CGFloat = 390
 
@@ -160,9 +156,11 @@ final class AppDelegate:
                     )
             )
 
-        self.panel = panel
+        self.panel =
+            panel
 
-        lastPanelHeight = 390
+        lastPanelHeight =
+            390
 
         observeContentSize()
 
@@ -181,8 +179,7 @@ final class AppDelegate:
         self.hotKeyManager =
             hotKeyManager
 
-        NotificationCenter
-            .default
+        NotificationCenter.default
             .addObserver(
                 self,
                 selector:
@@ -206,7 +203,7 @@ final class AppDelegate:
             )
     }
 
-    // MARK: - Menu Notification
+    // MARK: - Menu
 
     @objc
     private func
@@ -257,8 +254,10 @@ final class AppDelegate:
 
             showPanel(
                 reposition:
-                    !viewModel.isPinned,
-                activateApp: false
+                    !viewModel
+                        .isPinned,
+                activateApp:
+                    false
             )
 
             viewModel.translate()
@@ -273,8 +272,10 @@ final class AppDelegate:
 
         showPanel(
             reposition:
-                !viewModel.isPinned,
-            activateApp: true
+                !viewModel
+                    .isPinned,
+            activateApp:
+                true
         )
 
         DispatchQueue.main.async {
@@ -341,6 +342,7 @@ final class AppDelegate:
         guard let screen else {
 
             panel.center()
+
             return
         }
 
@@ -350,8 +352,11 @@ final class AppDelegate:
         let panelSize =
             panel.frame.size
 
-        let gap: CGFloat = 18
-        let margin: CGFloat = 16
+        let gap:
+            CGFloat = 18
+
+        let margin:
+            CGFloat = 16
 
         var x =
             mouseLocation.x
@@ -363,7 +368,8 @@ final class AppDelegate:
             - gap
 
         if
-            x + panelSize.width
+            x
+            + panelSize.width
             >
             visibleFrame.maxX
             - margin {
@@ -397,7 +403,8 @@ final class AppDelegate:
         }
 
         if
-            y + panelSize.height
+            y
+            + panelSize.height
             >
             visibleFrame.maxY
             - margin {
@@ -424,7 +431,8 @@ final class AppDelegate:
             .$isPinned
             .removeDuplicates()
             .receive(
-                on: RunLoop.main
+                on:
+                    RunLoop.main
             )
             .sink {
                 [weak self]
@@ -450,7 +458,8 @@ final class AppDelegate:
                 }
             }
             .store(
-                in: &cancellables
+                in:
+                    &cancellables
             )
     }
 
@@ -469,7 +478,8 @@ final class AppDelegate:
                     .$isTranslating
             )
             .receive(
-                on: RunLoop.main
+                on:
+                    RunLoop.main
             )
             .sink {
                 [weak self]
@@ -488,7 +498,8 @@ final class AppDelegate:
                     )
             }
             .store(
-                in: &cancellables
+                in:
+                    &cancellables
             )
     }
 
@@ -521,64 +532,77 @@ final class AppDelegate:
 
         let originalExtraLines =
             max(
-                visibleOriginalLines - 3,
+                visibleOriginalLines
+                - 3,
                 0
             )
-
-        // MARK: Translation
-
-        let translationLines =
-            estimatedLines(
-                for: translated,
-                charactersPerLine: 29
-            )
-
-        let visibleTranslationLines =
-            min(
-                max(
-                    translationLines,
-                    3
-                ),
-                9
-            )
-
-        let translationExtraLines =
-            max(
-                visibleTranslationLines - 3,
-                0
-            )
-
-        // MARK: Target Height
-
-        let baseHeight:
-            CGFloat = 390
 
         let originalExtraHeight =
             CGFloat(
                 originalExtraLines
             ) * 19
 
-        let translationExtraHeight =
-            CGFloat(
-                translationExtraLines
-            ) * 24
+        // MARK: Translation
 
-        var desiredHeight =
+        let translationExtraHeight:
+            CGFloat
+
+        if loading {
+
+            // Streaming 时使用固定高度。
+            //
+            // translatedText 每次 token 更新
+            // 都会进入这里，
+            // 但算出来的目标高度始终完全一致。
+            //
+            // 因此不会再 resize Panel。
+            translationExtraHeight =
+                88
+
+        } else if translated.isEmpty {
+
+            translationExtraHeight =
+                0
+
+        } else {
+
+            let translationLines =
+                estimatedLines(
+                    for: translated,
+                    charactersPerLine: 29
+                )
+
+            let visibleTranslationLines =
+                min(
+                    max(
+                        translationLines,
+                        3
+                    ),
+                    9
+                )
+
+            let translationExtraLines =
+                max(
+                    visibleTranslationLines
+                    - 3,
+                    0
+                )
+
+            translationExtraHeight =
+                CGFloat(
+                    translationExtraLines
+                ) * 24
+        }
+
+        // MARK: Height
+
+        let baseHeight:
+            CGFloat = 390
+
+        let desiredHeight =
             baseHeight
             + originalExtraHeight
             + translationExtraHeight
-
-        if
-            loading
-            &&
-            translated.isEmpty {
-
-            desiredHeight =
-                max(
-                    desiredHeight,
-                    baseHeight
-                )
-        }
 
         let finalHeight =
             min(
@@ -589,15 +613,8 @@ final class AppDelegate:
                 560
             )
 
-        // --------------------------------
-        // 关键：
-        // 空 → 第一个字
-        // 第一个字 → 空
-        //
-        // 目标高度仍然是 390，
-        // 所以完全不触碰 NSPanel frame。
-        // --------------------------------
-
+        // Streaming 每个 token 虽然都会触发 Publisher，
+        // 但目标高度不变，因此这里直接退出。
         guard
             abs(
                 finalHeight
@@ -652,7 +669,8 @@ final class AppDelegate:
                         )
                     )
 
-                return result
+                return
+                    result
                     + max(
                         lines,
                         1
@@ -716,8 +734,6 @@ final class AppDelegate:
             }
         }
 
-        // 不使用 NSWindow 动画。
-        // 输入和 Streaming 时不会产生抖动。
         panel.setFrame(
             frame,
             display: true,

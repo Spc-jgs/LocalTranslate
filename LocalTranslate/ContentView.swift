@@ -7,69 +7,95 @@ struct ContentView: View {
     var viewModel: TranslationViewModel
 
     @AppStorage(AppSettings.Key.model)
-    private var model = AppSettings.defaultModel
+    private var model =
+        AppSettings.defaultModel
 
     @FocusState
     private var inputFocused: Bool
 
-    private var originalTextBinding: Binding<String> {
+    private var originalTextBinding:
+        Binding<String> {
+
         Binding(
             get: {
                 viewModel.originalText
             },
             set: {
-                viewModel.updateOriginalTextFromUser($0)
+                viewModel
+                    .updateOriginalTextFromUser(
+                        $0
+                    )
             }
         )
     }
 
-    // MARK: - Stable Input Height
+    // MARK: - Input Height
 
-    private var inputHeight: CGFloat {
+    private var inputHeight:
+        CGFloat {
 
-        let lines = estimatedOriginalLines(
-            viewModel.originalText
-        )
+        let lines =
+            estimatedOriginalLines(
+                viewModel.originalText
+            )
 
-        // 空、1 行、2 行、3 行：
-        // 始终保持完全相同高度。
-        let visibleLines = min(
-            max(lines, 3),
-            7
-        )
+        let visibleLines =
+            min(
+                max(
+                    lines,
+                    3
+                ),
+                7
+            )
 
-        let baseHeight: CGFloat = 72
+        let baseHeight:
+            CGFloat = 72
 
         let extraLines =
-            max(visibleLines - 3, 0)
+            max(
+                visibleLines - 3,
+                0
+            )
 
-        return baseHeight
-            + CGFloat(extraLines) * 19
+        return
+            baseHeight
+            +
+            CGFloat(
+                extraLines
+            ) * 19
     }
 
-    private var translationHeight: CGFloat {
+    // MARK: - Translation Height
 
-        if
-            viewModel.isTranslating
-            &&
-            viewModel.translatedText.isEmpty {
+    private var translationHeight:
+        CGFloat {
 
-            return 72
+        // Streaming 期间固定高度。
+        //
+        // 这是解决长文本翻译时连续闪动的关键。
+        if viewModel.isTranslating {
+
+            return 170
         }
 
         guard
-            !viewModel.translatedText.isEmpty
+            !viewModel
+                .translatedText
+                .isEmpty
         else {
+
             return 82
         }
 
         let lines =
             estimatedTranslationLines(
-                viewModel.translatedText
+                viewModel
+                    .translatedText
             )
 
         let calculated =
-            CGFloat(lines) * 25
+            CGFloat(lines)
+            * 25
 
         return min(
             max(
@@ -195,8 +221,6 @@ struct ContentView: View {
 
             shortcutBadge
 
-            // MARK: Pin
-
             Button {
 
                 viewModel
@@ -252,8 +276,6 @@ struct ContentView: View {
                 : "钉住窗口"
             )
 
-            // MARK: Close
-
             Button {
 
                 NSApplication
@@ -264,7 +286,8 @@ struct ContentView: View {
             } label: {
 
                 Image(
-                    systemName: "xmark"
+                    systemName:
+                        "xmark"
                 )
                 .font(
                     .system(
@@ -354,8 +377,10 @@ struct ContentView: View {
             )
         )
         .frame(
-            maxWidth: .infinity,
-            alignment: .topLeading
+            maxWidth:
+                .infinity,
+            alignment:
+                .topLeading
         )
     }
 
@@ -410,7 +435,8 @@ struct ContentView: View {
                 "输入、粘贴，或在其他 App 中选中文字后按 ⌥⇧T…",
                 text:
                     originalTextBinding,
-                axis: .vertical
+                axis:
+                    .vertical
             )
             .focused(
                 $inputFocused
@@ -424,14 +450,12 @@ struct ContentView: View {
                 )
             )
             .lineSpacing(3)
-
-            // 仍然限制为最多 7 行，
-            // 但高度由我们自己稳定控制。
             .lineLimit(7)
-
             .frame(
-                height: inputHeight,
-                alignment: .topLeading
+                height:
+                    inputHeight,
+                alignment:
+                    .topLeading
             )
             .padding(
                 EdgeInsets(
@@ -520,7 +544,8 @@ struct ContentView: View {
 
         if
             let errorMessage =
-                viewModel.errorMessage {
+                viewModel
+                    .errorMessage {
 
             errorView(
                 errorMessage
@@ -546,7 +571,9 @@ struct ContentView: View {
                     viewModel
                         .isTranslating {
 
-                    HStack(spacing: 6) {
+                    HStack(
+                        spacing: 6
+                    ) {
 
                         ProgressView()
                             .controlSize(
@@ -609,7 +636,9 @@ struct ContentView: View {
     private var loadingView:
         some View {
 
-        HStack(spacing: 9) {
+        HStack(
+            spacing: 9
+        ) {
 
             ProgressView()
                 .controlSize(
@@ -690,7 +719,9 @@ struct ContentView: View {
 
             } label: {
 
-                HStack(spacing: 6) {
+                HStack(
+                    spacing: 6
+                ) {
 
                     if
                         viewModel
@@ -756,7 +787,8 @@ struct ContentView: View {
                 .font(
                     .system(
                         size: 10,
-                        design: .rounded
+                        design:
+                            .rounded
                     )
                 )
                 .foregroundStyle(
@@ -772,7 +804,9 @@ struct ContentView: View {
 
             } label: {
 
-                HStack(spacing: 6) {
+                HStack(
+                    spacing: 6
+                ) {
 
                     Image(
                         systemName:
@@ -852,7 +886,7 @@ struct ContentView: View {
         )
     }
 
-    // MARK: - Size Estimate
+    // MARK: - Line Estimate
 
     private func
     estimatedOriginalLines(
