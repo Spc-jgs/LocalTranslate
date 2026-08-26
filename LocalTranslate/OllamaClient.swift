@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 // MARK: - Chat Models
 
@@ -37,6 +38,54 @@ private struct OllamaTagModel: Decodable {
     let name: String
 }
 
+// MARK: - Translation Direction
+
+private enum TranslationDirection {
+
+    case chineseToEnglish
+    case englishToChinese
+
+    var instruction: String {
+        switch self {
+
+        case .chineseToEnglish:
+            return """
+            当前翻译方向固定为：
+
+            简体中文 → 英文
+
+            必须把输入中的中文自然语言翻译成自然、地道的英文。
+
+            即使输入非常短，例如：
+            “这样快吗”
+            “真的吗”
+            “为什么”
+            “可以吗”
+
+            也必须输出对应的英文。
+
+            不得把中文改写成另一种中文表达。
+            不得进行中文润色。
+            不得保持中文原样，除非内容属于代码、标识符或明确不应该翻译的技术内容。
+            """
+
+        case .englishToChinese:
+            return """
+            当前翻译方向固定为：
+
+            英文 → 简体中文
+
+            必须把输入中的英文自然语言翻译成自然、符合中文母语者习惯的简体中文。
+
+            即使输入非常短，也必须完成英文到中文的翻译。
+
+            不得仅仅改写英文。
+            不得保持英文自然语言原样，除非内容属于代码、标识符、专有名称或明确不应该翻译的技术内容。
+            """
+        }
+    }
+}
+
 // MARK: - Errors
 
 enum OllamaClientError: LocalizedError {
@@ -46,7 +95,9 @@ enum OllamaClientError: LocalizedError {
     case noModels
 
     var errorDescription: String? {
+
         switch self {
+
         case .invalidURL:
             return "Ollama 地址无效"
 
@@ -67,12 +118,18 @@ final class OllamaClient {
 
     private init() {}
 
-    // MARK: Translation
+    // MARK: - Translation
 
-    func translate(_ text: String) async throws -> String {
+    func translate(
+        _ text: String
+    ) async throws -> String {
 
         let url = try makeURL(
             path: "/api/chat"
+        )
+
+        let direction = detectDirection(
+            text
         )
 
         let body = OllamaChatRequest(
@@ -81,10 +138,16 @@ final class OllamaClient {
                 OllamaMessage(
                     role: "system",
                     content: systemPrompt
+                        + "\n\n"
+                        + direction.instruction
                 ),
                 OllamaMessage(
                     role: "user",
-                    content: text
+                    content: """
+                    请严格按照指定翻译方向处理下面的文本。
+
+                    \(text)
+                    """
                 )
             ],
             stream: false,
@@ -104,32 +167,41 @@ final class OllamaClient {
             forHTTPHeaderField: "Content-Type"
         )
 
-        request.httpBody = try JSONEncoder().encode(
-            body
-        )
+        request.httpBody = try JSONEncoder()
+            .encode(body)
 
-        let (data, response) = try await URLSession.shared.data(
-            for: request
-        )
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OllamaClientError.invalidResponse(
-                statusCode: -1
+        let (data, response) =
+            try await URLSession.shared.data(
+                for: request
             )
+
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode: -1
+                )
         }
 
-        guard (200...299).contains(
-            httpResponse.statusCode
-        ) else {
-            throw OllamaClientError.invalidResponse(
-                statusCode: httpResponse.statusCode
+        guard
+            (200...299).contains(
+                httpResponse.statusCode
             )
+        else {
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode:
+                        httpResponse.statusCode
+                )
         }
 
-        let result = try JSONDecoder().decode(
-            OllamaChatResponse.self,
-            from: data
-        )
+        let result = try JSONDecoder()
+            .decode(
+                OllamaChatResponse.self,
+                from: data
+            )
 
         return result.message.content
             .trimmingCharacters(
@@ -137,9 +209,108 @@ final class OllamaClient {
             )
     }
 
-    // MARK: Installed Models
+    // MARK: - Language Detection
 
-    func installedModelNames() async throws -> [String] {
+    private func detectDirection(
+        _ text: String
+    ) -> TranslationDirection {
+
+        let cleanedText =
+            text.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+
+        // 先用 macOS NaturalLanguage 判断
+        let recognizer =
+            NLLanguageRecognizer()
+
+        recognizer.processString(
+            cleanedText
+        )
+
+        if let language =
+            recognizer.dominantLanguage {
+
+            switch language {
+
+            case .simplifiedChinese,
+                 .traditionalChinese:
+
+                return .chineseToEnglish
+
+            case .english:
+
+                return .englishToChinese
+
+            default:
+                break
+            }
+        }
+
+        // NaturalLanguage 无法可靠判断时，
+        // 再通过汉字占比兜底。
+        if containsMeaningfulChinese(
+            cleanedText
+        ) {
+            return .chineseToEnglish
+        }
+
+        // 当前产品主要做中英互译，
+        // 其他无法识别情况默认视作英文。
+        return .englishToChinese
+    }
+
+    private func containsMeaningfulChinese(
+        _ text: String
+    ) -> Bool {
+
+        let scalars =
+            text.unicodeScalars
+
+        let chineseCount =
+            scalars.filter {
+                scalar in
+
+                let value =
+                    scalar.value
+
+                return
+                    (value >= 0x4E00 &&
+                     value <= 0x9FFF)
+                    ||
+                    (value >= 0x3400 &&
+                     value <= 0x4DBF)
+            }
+            .count
+
+        let meaningfulCount =
+            text.filter {
+                character in
+
+                !character.isWhitespace
+                &&
+                !character.isPunctuation
+            }
+            .count
+
+        guard meaningfulCount > 0 else {
+            return false
+        }
+
+        let ratio =
+            Double(chineseCount)
+            /
+            Double(meaningfulCount)
+
+        // 少量中文混在代码里时，
+        // 不轻易判成中文全文。
+        return ratio >= 0.15
+    }
+
+    // MARK: - Installed Models
+
+    func installedModelNames()
+    async throws -> [String] {
 
         let url = try makeURL(
             path: "/api/tags"
@@ -150,71 +321,81 @@ final class OllamaClient {
             timeoutInterval: 10
         )
 
-        let (data, response) = try await URLSession.shared.data(
-            for: request
-        )
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OllamaClientError.invalidResponse(
-                statusCode: -1
+        let (data, response) =
+            try await URLSession.shared.data(
+                for: request
             )
+
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode: -1
+                )
         }
 
-        guard (200...299).contains(
-            httpResponse.statusCode
-        ) else {
-            throw OllamaClientError.invalidResponse(
-                statusCode: httpResponse.statusCode
+        guard
+            (200...299).contains(
+                httpResponse.statusCode
             )
+        else {
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode:
+                        httpResponse.statusCode
+                )
         }
 
-        let result = try JSONDecoder().decode(
-            OllamaTagsResponse.self,
-            from: data
-        )
+        let result =
+            try JSONDecoder().decode(
+                OllamaTagsResponse.self,
+                from: data
+            )
 
         return result.models
             .map(\.name)
             .sorted {
-                $0.localizedCaseInsensitiveCompare($1)
-                    == .orderedAscending
+                $0.localizedCaseInsensitiveCompare(
+                    $1
+                ) == .orderedAscending
             }
     }
 
-    // MARK: URL
+    // MARK: - URL
 
     private func makeURL(
         path: String
     ) throws -> URL {
 
-        let baseURL = AppSettings.baseURL
-            .trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
-            .trimmingCharacters(
-                in: CharacterSet(
-                    charactersIn: "/"
+        let baseURL =
+            AppSettings.baseURL
+                .trimmingCharacters(
+                    in: .whitespacesAndNewlines
                 )
-            )
+                .trimmingCharacters(
+                    in: CharacterSet(
+                        charactersIn: "/"
+                    )
+                )
 
-        guard let url = URL(
-            string: baseURL + path
-        ) else {
+        guard let url =
+            URL(
+                string:
+                    baseURL + path
+            )
+        else {
             throw OllamaClientError.invalidURL
         }
 
         return url
     }
 
-    // MARK: System Prompt
+    // MARK: - System Prompt
 
     private let systemPrompt = """
     你是一个面向程序员、技术文档和互联网内容的专业本地化翻译器。
-
-    你的任务是自动判断输入语言并进行翻译：
-
-    - 英文内容 → 翻译成自然、流畅、符合简体中文母语者表达习惯的中文。
-    - 中文内容 → 翻译成自然、地道、符合英语母语者表达习惯的英文。
 
     翻译目标不是逐字对应，而是在准确保留原意的前提下，让结果像目标语言使用者自然写出来的内容。
 
@@ -226,7 +407,7 @@ final class OllamaClient {
 
     3. 技术内容必须保持准确。程序设计、软件工程、AI、互联网、API、框架、工具和计算机相关内容中的专业含义不得因为本地化而改变。
 
-    4. 以下技术内容原则上保持英文原样，不要翻译成中文：
+    4. 以下技术内容原则上保持英文原样，不要翻译：
        - 代码
        - 变量名
        - 常量名
@@ -284,8 +465,8 @@ final class OllamaClient {
     8. 如果输入完全是代码、命令、JSON、配置文件或其他无需翻译的技术内容，则原样返回，不要为了产生翻译结果而强行修改内容。
 
     9. 技术术语根据中文技术社区的自然使用习惯处理。
-       常见且通常直接使用英文的术语可以保留英文，不要为了中文化而强行翻译。
-       例如 API、SDK、Prompt、Token、Agent、Framework 等应根据上下文选择最自然的表达。
+       常见且通常直接使用英文的术语可以保留英文。
+       例如 API、SDK、Prompt、Token、Agent、Framework 等根据上下文选择最自然的表达。
 
     10. 对社交媒体、论坛、聊天内容：
         - 优先保留原文语气。
@@ -300,10 +481,9 @@ final class OllamaClient {
     12. 对俚语、习惯表达、网络用语：
         - 翻译其真实含义。
         - 不要机械逐词对应。
-        - 如果目标语言存在自然的对应表达，优先使用自然表达。
+        - 如果目标语言存在自然对应表达，优先使用自然表达。
 
     13. 保留原文的段落、列表和基本结构。
-        不要无故把一段文字拆成多段，也不要把多段文字合并。
 
     14. 不解释翻译过程。
 
@@ -311,7 +491,7 @@ final class OllamaClient {
 
     16. 不输出分析、备注、翻译建议或替代版本。
 
-    17. 不添加“翻译：”“Translation:”“以下是翻译结果：”或任何类似前缀。
+    17. 不添加“翻译：”“Translation:”“以下是翻译结果：”等前缀。
 
     18. 不使用引号包裹整个翻译结果，除非原文本身需要引号。
 
