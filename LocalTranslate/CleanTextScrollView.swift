@@ -4,6 +4,7 @@ import AppKit
 struct CleanTextScrollView: NSViewRepresentable {
 
     let text: String
+    var onCopy: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -27,7 +28,7 @@ struct CleanTextScrollView: NSViewRepresentable {
         scrollView.verticalScrollElasticity = .automatic
         scrollView.horizontalScrollElasticity = .none
 
-        let textView = NSTextView(
+        let textView = CopyFriendlyTextView(
             frame: .zero
         )
 
@@ -58,20 +59,19 @@ struct CleanTextScrollView: NSViewRepresentable {
             height: 0
         )
 
-        if let textContainer =
-            textView.textContainer {
-
+        if let textContainer = textView.textContainer {
             textContainer.widthTracksTextView = true
             textContainer.lineFragmentPadding = 0
         }
 
+        textView.onCopy = {
+            onCopy?()
+        }
+
         scrollView.documentView = textView
 
-        context.coordinator.textView =
-            textView
-
-        context.coordinator.scrollView =
-            scrollView
+        context.coordinator.textView = textView
+        context.coordinator.scrollView = scrollView
 
         setFullText(
             text,
@@ -86,41 +86,39 @@ struct CleanTextScrollView: NSViewRepresentable {
         context: Context
     ) {
 
-        // 强制保持无滚动条。
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
 
         guard
-            let textView =
-                context.coordinator.textView
+            let textView = context.coordinator.textView
         else {
             return
         }
 
-        let oldText =
-            textView.string
+        textView.onCopy = {
+            onCopy?()
+        }
+
+        let oldText = textView.string
 
         guard oldText != text else {
             return
         }
 
         let shouldFollowBottom =
-            context.coordinator
-                .isNearBottom()
+            context.coordinator.isNearBottom()
 
-        // Streaming 正常情况下只追加新增文本，
-        // 避免每个 token 都重绘全部内容。
+        // Streaming 时只追加新增内容，
+        // 避免每个 token 全文重绘。
         if text.hasPrefix(oldText) {
 
-            let suffix =
-                String(
-                    text.dropFirst(
-                        oldText.count
-                    )
+            let suffix = String(
+                text.dropFirst(
+                    oldText.count
                 )
+            )
 
             if !suffix.isEmpty {
-
                 appendText(
                     suffix,
                     to: textView
@@ -129,7 +127,7 @@ struct CleanTextScrollView: NSViewRepresentable {
 
         } else {
 
-            // 重新翻译、清空、切换内容时，
+            // 清空、重新翻译、切换内容时
             // 才整体替换。
             setFullText(
                 text,
@@ -138,29 +136,25 @@ struct CleanTextScrollView: NSViewRepresentable {
         }
 
         if shouldFollowBottom {
-
             context.coordinator
                 .scheduleScrollToBottom()
         }
     }
 
-    // MARK: - Text
+    // MARK: - Full Text
 
     private func setFullText(
         _ text: String,
         to textView: NSTextView
     ) {
 
-        let attributed =
-            NSAttributedString(
-                string: text,
-                attributes:
-                    textAttributes()
-            )
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: textAttributes()
+        )
 
         guard
-            let storage =
-                textView.textStorage
+            let storage = textView.textStorage
         else {
             return
         }
@@ -174,21 +168,20 @@ struct CleanTextScrollView: NSViewRepresentable {
         storage.endEditing()
     }
 
+    // MARK: - Append Text
+
     private func appendText(
         _ text: String,
         to textView: NSTextView
     ) {
 
-        let attributed =
-            NSAttributedString(
-                string: text,
-                attributes:
-                    textAttributes()
-            )
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: textAttributes()
+        )
 
         guard
-            let storage =
-                textView.textStorage
+            let storage = textView.textStorage
         else {
             return
         }
@@ -229,8 +222,8 @@ struct CleanTextScrollView: NSViewRepresentable {
 
     final class Coordinator {
 
-        weak var textView:
-            NSTextView?
+        fileprivate weak var textView:
+            CopyFriendlyTextView?
 
         weak var scrollView:
             NSScrollView?
@@ -266,8 +259,7 @@ struct CleanTextScrollView: NSViewRepresentable {
 
         func scheduleScrollToBottom() {
 
-            scrollWorkItem?
-                .cancel()
+            scrollWorkItem?.cancel()
 
             let workItem =
                 DispatchWorkItem {
@@ -280,24 +272,62 @@ struct CleanTextScrollView: NSViewRepresentable {
                         )
                 }
 
-            scrollWorkItem =
-                workItem
+            scrollWorkItem = workItem
 
-            // 将连续的 Streaming 滚动请求合并，
-            // 避免高频重绘。
             DispatchQueue.main
                 .asyncAfter(
-                    deadline:
-                        .now() + 0.08,
-                    execute:
-                        workItem
+                    deadline: .now() + 0.08,
+                    execute: workItem
                 )
         }
 
         deinit {
-
-            scrollWorkItem?
-                .cancel()
+            scrollWorkItem?.cancel()
         }
+    }
+}
+
+// MARK: - Copy Friendly NSTextView
+
+fileprivate final class CopyFriendlyTextView:
+    NSTextView {
+
+    var onCopy: (() -> Void)?
+
+    override func copy(
+        _ sender: Any?
+    ) {
+
+        let selection =
+            selectedRange()
+
+        // 有选区：
+        // 按 NSTextView 默认行为只复制选中内容。
+        if selection.length > 0 {
+
+            super.copy(sender)
+
+            onCopy?()
+
+            return
+        }
+
+        // 没有选区但触发了 Copy：
+        // 复制完整译文。
+        guard !string.isEmpty else {
+            return
+        }
+
+        let pasteboard =
+            NSPasteboard.general
+
+        pasteboard.clearContents()
+
+        pasteboard.setString(
+            string,
+            forType: .string
+        )
+
+        onCopy?()
     }
 }

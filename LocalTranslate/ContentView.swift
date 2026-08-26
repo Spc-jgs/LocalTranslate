@@ -13,6 +13,12 @@ struct ContentView: View {
     @FocusState
     private var inputFocused: Bool
 
+    @State
+    private var resultCopied = false
+
+    @State
+    private var copyFeedbackGeneration = 0
+
     private var originalTextBinding:
         Binding<String> {
 
@@ -27,6 +33,11 @@ struct ContentView: View {
                     )
             }
         )
+    }
+
+    private var copyFeedbackVisible: Bool {
+        viewModel.copied
+        || resultCopied
     }
 
     // MARK: - Input Height
@@ -70,11 +81,7 @@ struct ContentView: View {
     private var translationHeight:
         CGFloat {
 
-        // Streaming 期间固定高度。
-        //
-        // 这是解决长文本翻译时连续闪动的关键。
         if viewModel.isTranslating {
-
             return 170
         }
 
@@ -83,7 +90,6 @@ struct ContentView: View {
                 .translatedText
                 .isEmpty
         else {
-
             return 82
         }
 
@@ -150,6 +156,19 @@ struct ContentView: View {
         ) { _, _ in
 
             inputFocused = true
+        }
+        .onChange(
+            of:
+                viewModel
+                    .translatedText
+        ) { _, _ in
+
+            // 新翻译出现后，
+            // 清除之前通过文本选区触发的
+            // “已复制”反馈。
+            if !viewModel.isTranslating {
+                resultCopied = false
+            }
         }
     }
 
@@ -221,6 +240,8 @@ struct ContentView: View {
 
             shortcutBadge
 
+            // MARK: Pin
+
             Button {
 
                 viewModel
@@ -275,6 +296,8 @@ struct ContentView: View {
                 ? "取消钉住"
                 : "钉住窗口"
             )
+
+            // MARK: Close
 
             Button {
 
@@ -564,7 +587,10 @@ struct ContentView: View {
                 CleanTextScrollView(
                     text:
                         viewModel
-                            .translatedText
+                            .translatedText,
+                    onCopy: {
+                        showResultCopyFeedback()
+                    }
                 )
 
                 if
@@ -810,13 +836,13 @@ struct ContentView: View {
 
                     Image(
                         systemName:
-                            viewModel.copied
+                            copyFeedbackVisible
                             ? "checkmark"
                             : "doc.on.doc"
                     )
 
                     Text(
-                        viewModel.copied
+                        copyFeedbackVisible
                         ? "已复制"
                         : "复制"
                     )
@@ -839,6 +865,9 @@ struct ContentView: View {
                     .translatedText
                     .isEmpty
             )
+            .help(
+                "复制完整译文"
+            )
         }
         .padding(
             .horizontal,
@@ -848,6 +877,36 @@ struct ContentView: View {
             .vertical,
             10
         )
+    }
+
+    // MARK: - Copy Feedback
+
+    private func
+    showResultCopyFeedback() {
+
+        copyFeedbackGeneration += 1
+
+        let generation =
+            copyFeedbackGeneration
+
+        resultCopied = true
+
+        DispatchQueue.main
+            .asyncAfter(
+                deadline:
+                    .now() + 1.2
+            ) {
+
+                guard
+                    generation
+                    ==
+                    copyFeedbackGeneration
+                else {
+                    return
+                }
+
+                resultCopied = false
+            }
     }
 
     // MARK: - Components
@@ -920,7 +979,8 @@ struct ContentView: View {
                         )
                     )
 
-                return result
+                return
+                    result
                     + max(
                         lines,
                         1
@@ -960,7 +1020,8 @@ struct ContentView: View {
                         )
                     )
 
-                return result
+                return
+                    result
                     + max(
                         lines,
                         1
