@@ -4,6 +4,7 @@ import NaturalLanguage
 // MARK: - Chat Models
 
 struct OllamaChatRequest: Encodable {
+
     let model: String
     let messages: [OllamaMessage]
     let stream: Bool
@@ -20,22 +21,132 @@ struct OllamaChatRequest: Encodable {
 }
 
 struct OllamaMessage: Codable {
+
     let role: String
     let content: String
 }
 
-struct OllamaChatResponse: Decodable {
-    let message: OllamaMessage
+private struct OllamaStreamResponse: Decodable {
+
+    let message: OllamaMessage?
+    let done: Bool?
 }
 
-// MARK: - Tags Models
+// MARK: - Show Request
+
+private struct OllamaShowRequest: Encodable {
+
+    let model: String
+    let verbose: Bool
+}
+
+// MARK: - Installed Model
+
+struct OllamaInstalledModel: Identifiable, Hashable {
+
+    var id: String {
+        name
+    }
+
+    let name: String
+    let size: Int64
+
+    let parameterSize: String?
+    let quantizationLevel: String?
+
+    let family: String?
+    let format: String?
+
+    var formattedSize: String {
+
+        ByteCountFormatter.string(
+            fromByteCount: size,
+            countStyle: .file
+        )
+    }
+}
+
+// MARK: - Model Diagnostics
+
+struct OllamaModelDiagnostics: Equatable {
+
+    let nativeContextLength: Int?
+
+    let runtimeContextLength: Int?
+
+    let runtimeMemoryBytes: Int64?
+
+    let isRunning: Bool
+
+    // 当前 Ollama API 没有直接暴露
+    // OLLAMA_KV_CACHE_TYPE。
+    let kvCacheQuantization: String?
+}
+
+// MARK: - Tags API
 
 private struct OllamaTagsResponse: Decodable {
+
     let models: [OllamaTagModel]
 }
 
 private struct OllamaTagModel: Decodable {
+
     let name: String
+    let size: Int64
+    let details: OllamaTagDetails?
+}
+
+private struct OllamaTagDetails: Decodable {
+
+    let format: String?
+    let family: String?
+
+    let parameterSize: String?
+    let quantizationLevel: String?
+
+    enum CodingKeys: String, CodingKey {
+
+        case format
+        case family
+
+        case parameterSize =
+            "parameter_size"
+
+        case quantizationLevel =
+            "quantization_level"
+    }
+}
+
+// MARK: - PS API
+
+private struct OllamaPSResponse: Decodable {
+
+    let models: [OllamaRunningModel]
+}
+
+private struct OllamaRunningModel: Decodable {
+
+    let name: String
+    let model: String?
+
+    let size: Int64
+
+    let sizeVRAM: Int64?
+    let contextLength: Int?
+
+    enum CodingKeys: String, CodingKey {
+
+        case name
+        case model
+        case size
+
+        case sizeVRAM =
+            "size_vram"
+
+        case contextLength =
+            "context_length"
+    }
 }
 
 // MARK: - Translation Direction
@@ -46,9 +157,11 @@ private enum TranslationDirection {
     case englishToChinese
 
     var instruction: String {
+
         switch self {
 
         case .chineseToEnglish:
+
             return """
             当前翻译方向固定为：
 
@@ -70,6 +183,7 @@ private enum TranslationDirection {
             """
 
         case .englishToChinese:
+
             return """
             当前翻译方向固定为：
 
@@ -101,7 +215,9 @@ enum OllamaClientError: LocalizedError {
         case .invalidURL:
             return "Ollama 地址无效"
 
-        case .invalidResponse(let statusCode):
+        case .invalidResponse(
+            let statusCode
+        ):
             return "Ollama 请求失败，HTTP \(statusCode)"
 
         case .noModels:
@@ -112,73 +228,94 @@ enum OllamaClientError: LocalizedError {
 
 // MARK: - Client
 
+@MainActor
 final class OllamaClient {
 
-    static let shared = OllamaClient()
+    static let shared =
+        OllamaClient()
 
     private init() {}
 
-    // MARK: - Translation
+    // MARK: - Streaming Translation
 
-    func translate(
-        _ text: String
+    func translateStream(
+        _ text: String,
+        onPartialResult:
+            @escaping
+            @MainActor
+            @Sendable
+            (String) -> Void
     ) async throws -> String {
 
         let url = try makeURL(
             path: "/api/chat"
         )
 
-        let direction = detectDirection(
-            text
-        )
+        let direction =
+            detectDirection(
+                text
+            )
 
-        let body = OllamaChatRequest(
-            model: AppSettings.model,
-            messages: [
-                OllamaMessage(
-                    role: "system",
-                    content: systemPrompt
-                        + "\n\n"
-                        + direction.instruction
-                ),
-                OllamaMessage(
-                    role: "user",
-                    content: """
-                    请严格按照指定翻译方向处理下面的文本。
+        let body =
+            OllamaChatRequest(
+                model:
+                    AppSettings.model,
+                messages: [
 
-                    \(text)
-                    """
-                )
-            ],
-            stream: false,
-            think: false,
-            keepAlive: AppSettings.keepAlive
-        )
+                    OllamaMessage(
+                        role: "system",
+                        content:
+                            systemPrompt
+                            + "\n\n"
+                            + direction.instruction
+                    ),
 
-        var request = URLRequest(
-            url: url,
-            timeoutInterval: 180
-        )
+                    OllamaMessage(
+                        role: "user",
+                        content: """
+                        请严格按照指定翻译方向处理下面的文本。
 
-        request.httpMethod = "POST"
+                        \(text)
+                        """
+                    )
+                ],
+                stream: true,
+                think: false,
+                keepAlive:
+                    AppSettings.keepAlive
+            )
+
+        var request =
+            URLRequest(
+                url: url,
+                timeoutInterval: 180
+            )
+
+        request.httpMethod =
+            "POST"
 
         request.setValue(
             "application/json",
-            forHTTPHeaderField: "Content-Type"
+            forHTTPHeaderField:
+                "Content-Type"
         )
 
-        request.httpBody = try JSONEncoder()
-            .encode(body)
+        request.httpBody =
+            try JSONEncoder()
+                .encode(body)
 
-        let (data, response) =
-            try await URLSession.shared.data(
+        let (bytes, response) =
+            try await
+            URLSession.shared.bytes(
                 for: request
             )
 
         guard
             let httpResponse =
-                response as? HTTPURLResponse
+                response
+                as? HTTPURLResponse
         else {
+
             throw OllamaClientError
                 .invalidResponse(
                     statusCode: -1
@@ -186,27 +323,494 @@ final class OllamaClient {
         }
 
         guard
-            (200...299).contains(
-                httpResponse.statusCode
-            )
+            (200...299)
+                .contains(
+                    httpResponse
+                        .statusCode
+                )
         else {
+
             throw OllamaClientError
                 .invalidResponse(
                     statusCode:
-                        httpResponse.statusCode
+                        httpResponse
+                            .statusCode
                 )
         }
 
-        let result = try JSONDecoder()
-            .decode(
-                OllamaChatResponse.self,
-                from: data
+        var completeText = ""
+
+        for try await line
+            in bytes.lines {
+
+            try Task
+                .checkCancellation()
+
+            let trimmedLine =
+                line.trimmingCharacters(
+                    in:
+                        .whitespacesAndNewlines
+                )
+
+            guard
+                !trimmedLine.isEmpty
+            else {
+                continue
+            }
+
+            guard
+                let data =
+                    trimmedLine.data(
+                        using: .utf8
+                    )
+            else {
+                continue
+            }
+
+            let chunk =
+                try JSONDecoder()
+                    .decode(
+                        OllamaStreamResponse.self,
+                        from: data
+                    )
+
+            if
+                let content =
+                    chunk
+                        .message?
+                        .content,
+                !content.isEmpty {
+
+                completeText +=
+                    content
+
+                onPartialResult(
+                    completeText
+                )
+            }
+
+            if chunk.done == true {
+                break
+            }
+        }
+
+        return completeText
+            .trimmingCharacters(
+                in:
+                    .whitespacesAndNewlines
+            )
+    }
+
+    // MARK: - Installed Models
+
+    func installedModels()
+        async throws
+        -> [OllamaInstalledModel] {
+
+        let url = try makeURL(
+            path: "/api/tags"
+        )
+
+        let request =
+            URLRequest(
+                url: url,
+                timeoutInterval: 10
             )
 
-        return result.message.content
-            .trimmingCharacters(
-                in: .whitespacesAndNewlines
+        let (data, response) =
+            try await
+            URLSession.shared.data(
+                for: request
             )
+
+        guard
+            let httpResponse =
+                response
+                as? HTTPURLResponse
+        else {
+
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode: -1
+                )
+        }
+
+        guard
+            (200...299)
+                .contains(
+                    httpResponse
+                        .statusCode
+                )
+        else {
+
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode:
+                        httpResponse
+                            .statusCode
+                )
+        }
+
+        let result =
+            try JSONDecoder()
+                .decode(
+                    OllamaTagsResponse.self,
+                    from: data
+                )
+
+        return result.models
+            .map { model in
+
+                OllamaInstalledModel(
+                    name:
+                        model.name,
+
+                    size:
+                        model.size,
+
+                    parameterSize:
+                        model.details?
+                            .parameterSize,
+
+                    quantizationLevel:
+                        model.details?
+                            .quantizationLevel,
+
+                    family:
+                        model.details?
+                            .family,
+
+                    format:
+                        model.details?
+                            .format
+                )
+            }
+            .sorted {
+
+                $0.name
+                    .localizedCaseInsensitiveCompare(
+                        $1.name
+                    )
+                ==
+                .orderedAscending
+            }
+    }
+
+    func installedModelNames()
+        async throws
+        -> [String] {
+
+        let models =
+            try await
+            installedModels()
+
+        return models
+            .map(\.name)
+    }
+
+    // MARK: - Model Diagnostics
+
+    func modelDiagnostics(
+        for modelName: String
+    ) async throws
+        -> OllamaModelDiagnostics {
+
+        let nativeContext =
+            try await
+            nativeContextLength(
+                for: modelName
+            )
+
+        let runningModels =
+            try await
+            runningModels()
+
+        let runningModel =
+            runningModels.first {
+                item in
+
+                item.name ==
+                    modelName
+                ||
+                item.model ==
+                    modelName
+            }
+
+        return OllamaModelDiagnostics(
+
+            nativeContextLength:
+                nativeContext,
+
+            runtimeContextLength:
+                runningModel?
+                    .contextLength,
+
+            runtimeMemoryBytes:
+                runningModel?
+                    .sizeVRAM,
+
+            isRunning:
+                runningModel != nil,
+
+            kvCacheQuantization:
+                nil
+        )
+    }
+
+    // MARK: - Native Context
+
+    private func nativeContextLength(
+        for modelName: String
+    ) async throws -> Int? {
+
+        let url = try makeURL(
+            path: "/api/show"
+        )
+
+        let body =
+            OllamaShowRequest(
+                model: modelName,
+                verbose: false
+            )
+
+        var request =
+            URLRequest(
+                url: url,
+                timeoutInterval: 15
+            )
+
+        request.httpMethod =
+            "POST"
+
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField:
+                "Content-Type"
+        )
+
+        request.httpBody =
+            try JSONEncoder()
+                .encode(body)
+
+        let (data, response) =
+            try await
+            URLSession.shared.data(
+                for: request
+            )
+
+        guard
+            let httpResponse =
+                response
+                as? HTTPURLResponse
+        else {
+
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode: -1
+                )
+        }
+
+        guard
+            (200...299)
+                .contains(
+                    httpResponse
+                        .statusCode
+                )
+        else {
+
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode:
+                        httpResponse
+                            .statusCode
+                )
+        }
+
+        guard
+            let root =
+                try JSONSerialization
+                    .jsonObject(
+                        with: data
+                    )
+                as? [String: Any],
+
+            let modelInfo =
+                root["model_info"]
+                as? [String: Any]
+
+        else {
+            return nil
+        }
+
+        return extractNativeContextLength(
+            from: modelInfo
+        )
+    }
+
+    private func
+    extractNativeContextLength(
+        from modelInfo:
+            [String: Any]
+    ) -> Int? {
+
+        // 优先通过 architecture
+        // 精确定位主模型 context。
+        if
+            let architecture =
+                modelInfo[
+                    "general.architecture"
+                ]
+                as? String {
+
+            let key =
+                "\(architecture).context_length"
+
+            if
+                let value =
+                    integerValue(
+                        modelInfo[key]
+                    ) {
+
+                return value
+            }
+        }
+
+        // 不同模型的 architecture
+        // 命名并不完全一致，
+        // 所以再做通用 fallback。
+        let candidates =
+            modelInfo
+                .compactMap {
+                    key,
+                    value
+                    -> (String, Int)?
+                    in
+
+                    guard
+                        key.hasSuffix(
+                            ".context_length"
+                        )
+                    else {
+                        return nil
+                    }
+
+                    // 排除视觉、音频等
+                    // 子模型 context。
+                    if
+                        key.contains(
+                            ".vision."
+                        )
+                        ||
+                        key.contains(
+                            ".audio."
+                        ) {
+
+                        return nil
+                    }
+
+                    guard
+                        let context =
+                            integerValue(
+                                value
+                            )
+                    else {
+                        return nil
+                    }
+
+                    return (
+                        key,
+                        context
+                    )
+                }
+
+        return candidates
+            .sorted {
+                $0.0.count <
+                    $1.0.count
+            }
+            .first?
+            .1
+    }
+
+    private func integerValue(
+        _ value: Any?
+    ) -> Int? {
+
+        if
+            let number =
+                value as? NSNumber {
+
+            return number.intValue
+        }
+
+        if
+            let string =
+                value as? String {
+
+            return Int(string)
+        }
+
+        return nil
+    }
+
+    // MARK: - Running Models
+
+    private func runningModels()
+        async throws
+        -> [OllamaRunningModel] {
+
+        let url = try makeURL(
+            path: "/api/ps"
+        )
+
+        let request =
+            URLRequest(
+                url: url,
+                timeoutInterval: 10
+            )
+
+        let (data, response) =
+            try await
+            URLSession.shared.data(
+                for: request
+            )
+
+        guard
+            let httpResponse =
+                response
+                as? HTTPURLResponse
+        else {
+
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode: -1
+                )
+        }
+
+        guard
+            (200...299)
+                .contains(
+                    httpResponse
+                        .statusCode
+                )
+        else {
+
+            throw OllamaClientError
+                .invalidResponse(
+                    statusCode:
+                        httpResponse
+                            .statusCode
+                )
+        }
+
+        let result =
+            try JSONDecoder()
+                .decode(
+                    OllamaPSResponse.self,
+                    from: data
+                )
+
+        return result.models
     }
 
     // MARK: - Language Detection
@@ -217,10 +821,10 @@ final class OllamaClient {
 
         let cleanedText =
             text.trimmingCharacters(
-                in: .whitespacesAndNewlines
+                in:
+                    .whitespacesAndNewlines
             )
 
-        // 先用 macOS NaturalLanguage 判断
         let recognizer =
             NLLanguageRecognizer()
 
@@ -228,139 +832,102 @@ final class OllamaClient {
             cleanedText
         )
 
-        if let language =
-            recognizer.dominantLanguage {
+        if
+            let language =
+                recognizer
+                    .dominantLanguage {
 
             switch language {
 
-            case .simplifiedChinese,
-                 .traditionalChinese:
+            case
+                .simplifiedChinese,
+                .traditionalChinese:
 
-                return .chineseToEnglish
+                return
+                    .chineseToEnglish
 
             case .english:
 
-                return .englishToChinese
+                return
+                    .englishToChinese
 
             default:
                 break
             }
         }
 
-        // NaturalLanguage 无法可靠判断时，
-        // 再通过汉字占比兜底。
-        if containsMeaningfulChinese(
-            cleanedText
-        ) {
-            return .chineseToEnglish
+        if
+            containsMeaningfulChinese(
+                cleanedText
+            ) {
+
+            return
+                .chineseToEnglish
         }
 
-        // 当前产品主要做中英互译，
-        // 其他无法识别情况默认视作英文。
-        return .englishToChinese
+        return
+            .englishToChinese
     }
 
-    private func containsMeaningfulChinese(
+    private func
+    containsMeaningfulChinese(
         _ text: String
     ) -> Bool {
 
-        let scalars =
-            text.unicodeScalars
-
         let chineseCount =
-            scalars.filter {
-                scalar in
+            text.unicodeScalars
+                .filter { scalar in
 
-                let value =
-                    scalar.value
+                    let value =
+                        scalar.value
 
-                return
-                    (value >= 0x4E00 &&
-                     value <= 0x9FFF)
-                    ||
-                    (value >= 0x3400 &&
-                     value <= 0x4DBF)
-            }
-            .count
+                    return
+                        (
+                            value >=
+                                0x4E00
+                            &&
+                            value <=
+                                0x9FFF
+                        )
+                        ||
+                        (
+                            value >=
+                                0x3400
+                            &&
+                            value <=
+                                0x4DBF
+                        )
+                }
+                .count
 
         let meaningfulCount =
             text.filter {
                 character in
 
-                !character.isWhitespace
+                !character
+                    .isWhitespace
                 &&
-                !character.isPunctuation
+                !character
+                    .isPunctuation
             }
             .count
 
-        guard meaningfulCount > 0 else {
+        guard
+            meaningfulCount > 0
+        else {
             return false
         }
 
         let ratio =
-            Double(chineseCount)
+            Double(
+                chineseCount
+            )
             /
-            Double(meaningfulCount)
+            Double(
+                meaningfulCount
+            )
 
-        // 少量中文混在代码里时，
-        // 不轻易判成中文全文。
         return ratio >= 0.15
-    }
-
-    // MARK: - Installed Models
-
-    func installedModelNames()
-    async throws -> [String] {
-
-        let url = try makeURL(
-            path: "/api/tags"
-        )
-
-        let request = URLRequest(
-            url: url,
-            timeoutInterval: 10
-        )
-
-        let (data, response) =
-            try await URLSession.shared.data(
-                for: request
-            )
-
-        guard
-            let httpResponse =
-                response as? HTTPURLResponse
-        else {
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode: -1
-                )
-        }
-
-        guard
-            (200...299).contains(
-                httpResponse.statusCode
-            )
-        else {
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode:
-                        httpResponse.statusCode
-                )
-        }
-
-        let result =
-            try JSONDecoder().decode(
-                OllamaTagsResponse.self,
-                from: data
-            )
-
-        return result.models
-            .map(\.name)
-            .sorted {
-                $0.localizedCaseInsensitiveCompare(
-                    $1
-                ) == .orderedAscending
-            }
     }
 
     // MARK: - URL
@@ -372,21 +939,29 @@ final class OllamaClient {
         let baseURL =
             AppSettings.baseURL
                 .trimmingCharacters(
-                    in: .whitespacesAndNewlines
+                    in:
+                        .whitespacesAndNewlines
                 )
                 .trimmingCharacters(
-                    in: CharacterSet(
-                        charactersIn: "/"
-                    )
+                    in:
+                        CharacterSet(
+                            charactersIn:
+                                "/"
+                        )
                 )
 
-        guard let url =
-            URL(
-                string:
-                    baseURL + path
-            )
+        guard
+            let url =
+                URL(
+                    string:
+                        baseURL
+                        + path
+                )
         else {
-            throw OllamaClientError.invalidURL
+
+            throw
+                OllamaClientError
+                    .invalidURL
         }
 
         return url
@@ -465,8 +1040,8 @@ final class OllamaClient {
     8. 如果输入完全是代码、命令、JSON、配置文件或其他无需翻译的技术内容，则原样返回，不要为了产生翻译结果而强行修改内容。
 
     9. 技术术语根据中文技术社区的自然使用习惯处理。
-       常见且通常直接使用英文的术语可以保留英文。
-       例如 API、SDK、Prompt、Token、Agent、Framework 等根据上下文选择最自然的表达。
+       常见且通常直接使用英文的术语可以保留英文，不要为了中文化而强行翻译。
+       例如 API、SDK、Prompt、Token、Agent、Framework 等应根据上下文选择最自然的表达。
 
     10. 对社交媒体、论坛、聊天内容：
         - 优先保留原文语气。
@@ -481,9 +1056,10 @@ final class OllamaClient {
     12. 对俚语、习惯表达、网络用语：
         - 翻译其真实含义。
         - 不要机械逐词对应。
-        - 如果目标语言存在自然对应表达，优先使用自然表达。
+        - 如果目标语言存在自然的对应表达，优先使用自然表达。
 
     13. 保留原文的段落、列表和基本结构。
+        不要无故把一段文字拆成多段，也不要把多段文字合并。
 
     14. 不解释翻译过程。
 
@@ -491,7 +1067,11 @@ final class OllamaClient {
 
     16. 不输出分析、备注、翻译建议或替代版本。
 
-    17. 不添加“翻译：”“Translation:”“以下是翻译结果：”等前缀。
+    17. 不添加：
+        “翻译：”
+        “Translation:”
+        “以下是翻译结果：”
+        或任何类似前缀。
 
     18. 不使用引号包裹整个翻译结果，除非原文本身需要引号。
 

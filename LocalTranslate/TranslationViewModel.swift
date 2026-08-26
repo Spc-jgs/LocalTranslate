@@ -14,14 +14,16 @@ final class TranslationViewModel: ObservableObject {
 
     @Published var errorMessage: String?
 
-    // 每次 +1，通知 SwiftUI 把焦点放到输入框
     @Published var inputFocusRequest = 0
 
-    private var translationTask: Task<Void, Never>?
+    private var translationTask:
+        Task<Void, Never>?
 
     // MARK: - Selected Text
 
-    func loadSelectedText(_ text: String) {
+    func loadSelectedText(
+        _ text: String
+    ) {
 
         cancelTranslation()
 
@@ -58,8 +60,6 @@ final class TranslationViewModel: ObservableObject {
             return
         }
 
-        // 用户开始修改原文后，
-        // 之前的翻译已经属于旧内容。
         cancelTranslation()
 
         originalText = text
@@ -82,14 +82,17 @@ final class TranslationViewModel: ObservableObject {
 
     func translate() {
 
-        let text = originalText
-            .trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
+        let text =
+            originalText
+                .trimmingCharacters(
+                    in:
+                        .whitespacesAndNewlines
+                )
 
         guard !text.isEmpty else {
 
-            errorMessage = "请输入需要翻译的内容"
+            errorMessage =
+                "请输入需要翻译的内容"
 
             requestInputFocus()
 
@@ -102,52 +105,105 @@ final class TranslationViewModel: ObservableObject {
         errorMessage = nil
         isTranslating = true
 
-        translationTask = Task { [weak self] in
+        translationTask =
+            Task { [weak self] in
 
-            guard let self else {
-                return
+                guard let self else {
+                    return
+                }
+
+                do {
+
+                    let result =
+                        try await
+                        OllamaClient.shared
+                            .translateStream(
+                                text
+                            ) {
+                                [weak self]
+                                partialResult in
+
+                                guard
+                                    let self
+                                else {
+                                    return
+                                }
+
+                                let currentText =
+                                    self
+                                        .originalText
+                                        .trimmingCharacters(
+                                            in:
+                                                .whitespacesAndNewlines
+                                        )
+
+                                // 用户中途已经改了原文，
+                                // 不再接收旧流。
+                                guard
+                                    currentText
+                                    == text
+                                else {
+                                    return
+                                }
+
+                                self.translatedText =
+                                    partialResult
+                            }
+
+                    guard
+                        !Task.isCancelled
+                    else {
+                        return
+                    }
+
+                    let currentText =
+                        self.originalText
+                            .trimmingCharacters(
+                                in:
+                                    .whitespacesAndNewlines
+                            )
+
+                    guard
+                        currentText == text
+                    else {
+                        return
+                    }
+
+                    self.translatedText =
+                        result
+
+                    self.isTranslating =
+                        false
+
+                    self.translationTask =
+                        nil
+
+                } catch is CancellationError {
+
+                    self.isTranslating =
+                        false
+
+                    self.translationTask =
+                        nil
+
+                } catch {
+
+                    guard
+                        !Task.isCancelled
+                    else {
+                        return
+                    }
+
+                    self.errorMessage =
+                        "翻译失败：\(error.localizedDescription)"
+
+                    self.isTranslating =
+                        false
+
+                    self.translationTask =
+                        nil
+                }
             }
-
-            do {
-
-                let result = try await
-                    OllamaClient.shared.translate(
-                        text
-                    )
-
-                guard !Task.isCancelled else {
-                    return
-                }
-
-                // 如果翻译过程中用户已经修改了原文，
-                // 就不要让旧请求覆盖新状态。
-                let currentText =
-                    self.originalText
-                        .trimmingCharacters(
-                            in: .whitespacesAndNewlines
-                        )
-
-                guard currentText == text else {
-                    return
-                }
-
-                self.translatedText = result
-                self.isTranslating = false
-                self.translationTask = nil
-
-            } catch {
-
-                guard !Task.isCancelled else {
-                    return
-                }
-
-                self.errorMessage =
-                    "翻译失败：\(error.localizedDescription)"
-
-                self.isTranslating = false
-                self.translationTask = nil
-            }
-        }
     }
 
     private func cancelTranslation() {
@@ -168,24 +224,31 @@ final class TranslationViewModel: ObservableObject {
 
     func copyTranslation() {
 
-        guard !translatedText.isEmpty else {
+        guard
+            !translatedText.isEmpty
+        else {
             return
         }
 
-        NSPasteboard.general.clearContents()
+        NSPasteboard.general
+            .clearContents()
 
-        NSPasteboard.general.setString(
-            translatedText,
-            forType: .string
-        )
+        NSPasteboard.general
+            .setString(
+                translatedText,
+                forType: .string
+            )
 
         copied = true
 
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + 1.5
-        ) { [weak self] in
+        DispatchQueue.main
+            .asyncAfter(
+                deadline:
+                    .now() + 1.5
+            ) {
+                [weak self] in
 
-            self?.copied = false
-        }
+                self?.copied = false
+            }
     }
 }

@@ -7,23 +7,76 @@ struct ContentView: View {
     var viewModel: TranslationViewModel
 
     @AppStorage(AppSettings.Key.model)
-    private var model =
-        AppSettings.defaultModel
+    private var model = AppSettings.defaultModel
 
     @FocusState
     private var inputFocused: Bool
 
     private var originalTextBinding: Binding<String> {
-
         Binding(
             get: {
                 viewModel.originalText
             },
             set: {
-                viewModel.updateOriginalTextFromUser(
-                    $0
-                )
+                viewModel.updateOriginalTextFromUser($0)
             }
+        )
+    }
+
+    // MARK: - Stable Input Height
+
+    private var inputHeight: CGFloat {
+
+        let lines = estimatedOriginalLines(
+            viewModel.originalText
+        )
+
+        // 空、1 行、2 行、3 行：
+        // 始终保持完全相同高度。
+        let visibleLines = min(
+            max(lines, 3),
+            7
+        )
+
+        let baseHeight: CGFloat = 72
+
+        let extraLines =
+            max(visibleLines - 3, 0)
+
+        return baseHeight
+            + CGFloat(extraLines) * 19
+    }
+
+    private var translationHeight: CGFloat {
+
+        if
+            viewModel.isTranslating
+            &&
+            viewModel.translatedText.isEmpty {
+
+            return 72
+        }
+
+        guard
+            !viewModel.translatedText.isEmpty
+        else {
+            return 82
+        }
+
+        let lines =
+            estimatedTranslationLines(
+                viewModel.translatedText
+            )
+
+        let calculated =
+            CGFloat(lines) * 25
+
+        return min(
+            max(
+                calculated,
+                82
+            ),
+            220
         )
     }
 
@@ -34,20 +87,18 @@ struct ContentView: View {
             header
 
             Divider()
-                .opacity(0.35)
+                .opacity(0.28)
 
-            content
+            mainContent
 
             Divider()
-                .opacity(0.35)
+                .opacity(0.28)
 
             footer
         }
-        .frame(
-            maxWidth: .infinity,
-            maxHeight: .infinity
+        .background(
+            .ultraThinMaterial
         )
-        .background(.ultraThinMaterial)
         .clipShape(
             RoundedRectangle(
                 cornerRadius: 16,
@@ -61,12 +112,15 @@ struct ContentView: View {
                 style: .continuous
             )
             .stroke(
-                .primary.opacity(0.08),
+                Color.primary
+                    .opacity(0.075),
                 lineWidth: 1
             )
         }
         .onChange(
-            of: viewModel.inputFocusRequest
+            of:
+                viewModel
+                    .inputFocusRequest
         ) { _, _ in
 
             inputFocused = true
@@ -75,7 +129,8 @@ struct ContentView: View {
 
     // MARK: - Header
 
-    private var header: some View {
+    private var header:
+        some View {
 
         HStack(spacing: 10) {
 
@@ -86,7 +141,8 @@ struct ContentView: View {
                     style: .continuous
                 )
                 .fill(
-                    .primary.opacity(0.065)
+                    Color.primary
+                        .opacity(0.06)
                 )
 
                 Image(
@@ -113,13 +169,15 @@ struct ContentView: View {
                 spacing: 1
             ) {
 
-                Text("Local Translate")
-                    .font(
-                        .system(
-                            size: 13,
-                            weight: .semibold
-                        )
+                Text(
+                    "Local Translate"
+                )
+                .font(
+                    .system(
+                        size: 13,
+                        weight: .semibold
                     )
+                )
 
                 Text(model)
                     .font(
@@ -140,7 +198,10 @@ struct ContentView: View {
             // MARK: Pin
 
             Button {
-                viewModel.togglePinned()
+
+                viewModel
+                    .togglePinned()
+
             } label: {
 
                 Image(
@@ -157,8 +218,8 @@ struct ContentView: View {
                 )
                 .foregroundStyle(
                     viewModel.isPinned
-                    ? .primary
-                    : .secondary
+                    ? Color.primary
+                    : Color.secondary
                 )
                 .frame(
                     width: 28,
@@ -166,18 +227,23 @@ struct ContentView: View {
                 )
                 .background {
 
-                    if viewModel.isPinned {
+                    if
+                        viewModel
+                            .isPinned {
 
                         RoundedRectangle(
                             cornerRadius: 7,
                             style: .continuous
                         )
                         .fill(
-                            .primary.opacity(0.08)
+                            Color.primary
+                                .opacity(0.08)
                         )
                     }
                 }
-                .contentShape(Rectangle())
+                .contentShape(
+                    Rectangle()
+                )
             }
             .buttonStyle(.plain)
             .help(
@@ -190,7 +256,8 @@ struct ContentView: View {
 
             Button {
 
-                NSApplication.shared
+                NSApplication
+                    .shared
                     .keyWindow?
                     .orderOut(nil)
 
@@ -212,7 +279,9 @@ struct ContentView: View {
                     width: 28,
                     height: 28
                 )
-                .contentShape(Rectangle())
+                .contentShape(
+                    Rectangle()
+                )
             }
             .buttonStyle(.plain)
             .help("关闭")
@@ -227,7 +296,8 @@ struct ContentView: View {
         )
     }
 
-    private var shortcutBadge: some View {
+    private var shortcutBadge:
+        some View {
 
         Text("⌥⇧T")
             .font(
@@ -255,40 +325,44 @@ struct ContentView: View {
                     style: .continuous
                 )
                 .fill(
-                    .primary.opacity(0.05)
+                    Color.primary
+                        .opacity(0.05)
                 )
             }
     }
 
-    // MARK: - Content
+    // MARK: - Main Content
 
-    private var content: some View {
+    private var mainContent:
+        some View {
 
-        ScrollView {
+        VStack(
+            alignment: .leading,
+            spacing: 18
+        ) {
 
-            VStack(
-                alignment: .leading,
-                spacing: 18
-            ) {
+            originalSection
 
-                originalSection
-
-                translationSection
-            }
-            .padding(
-                EdgeInsets(
-                    top: 15,
-                    leading: 18,
-                    bottom: 17,
-                    trailing: 18
-                )
-            )
+            translationSection
         }
+        .padding(
+            EdgeInsets(
+                top: 15,
+                leading: 18,
+                bottom: 17,
+                trailing: 18
+            )
+        )
+        .frame(
+            maxWidth: .infinity,
+            alignment: .topLeading
+        )
     }
 
     // MARK: - Original
 
-    private var originalSection: some View {
+    private var originalSection:
+        some View {
 
         VStack(
             alignment: .leading,
@@ -305,13 +379,17 @@ struct ContentView: View {
 
                 Spacer()
 
-                if !viewModel
-                    .originalText
-                    .isEmpty {
+                if
+                    !viewModel
+                        .originalText
+                        .isEmpty {
 
-                    Button("清空") {
+                    Button(
+                        "清空"
+                    ) {
 
-                        viewModel.clearAll()
+                        viewModel
+                            .clearAll()
                     }
                     .font(
                         .system(
@@ -322,62 +400,47 @@ struct ContentView: View {
                     .foregroundStyle(
                         .tertiary
                     )
-                    .buttonStyle(.plain)
+                    .buttonStyle(
+                        .plain
+                    )
                 }
             }
 
-            ZStack(
+            TextField(
+                "输入、粘贴，或在其他 App 中选中文字后按 ⌥⇧T…",
+                text:
+                    originalTextBinding,
+                axis: .vertical
+            )
+            .focused(
+                $inputFocused
+            )
+            .textFieldStyle(
+                .plain
+            )
+            .font(
+                .system(
+                    size: 13
+                )
+            )
+            .lineSpacing(3)
+
+            // 仍然限制为最多 7 行，
+            // 但高度由我们自己稳定控制。
+            .lineLimit(7)
+
+            .frame(
+                height: inputHeight,
                 alignment: .topLeading
-            ) {
-
-                if viewModel
-                    .originalText
-                    .isEmpty {
-
-                    Text(
-                        "输入、粘贴，或在其他 App 中选中文字后按 ⌥⇧T…"
-                    )
-                    .font(
-                        .system(
-                            size: 13
-                        )
-                    )
-                    .foregroundStyle(
-                        .tertiary
-                    )
-                    .padding(
-                        EdgeInsets(
-                            top: 9,
-                            leading: 7,
-                            bottom: 0,
-                            trailing: 0
-                        )
-                    )
-                    .allowsHitTesting(false)
-                }
-
-                TextEditor(
-                    text:
-                        originalTextBinding
+            )
+            .padding(
+                EdgeInsets(
+                    top: 10,
+                    leading: 10,
+                    bottom: 10,
+                    trailing: 10
                 )
-                .focused(
-                    $inputFocused
-                )
-                .font(
-                    .system(
-                        size: 13
-                    )
-                )
-                .lineSpacing(3)
-                .scrollContentBackground(
-                    .hidden
-                )
-                .frame(
-                    minHeight: 72,
-                    maxHeight: 145
-                )
-            }
-            .padding(5)
+            )
             .background {
 
                 RoundedRectangle(
@@ -385,7 +448,8 @@ struct ContentView: View {
                     style: .continuous
                 )
                 .fill(
-                    .primary.opacity(0.032)
+                    Color.primary
+                        .opacity(0.032)
                 )
             }
             .overlay {
@@ -396,8 +460,10 @@ struct ContentView: View {
                 )
                 .stroke(
                     inputFocused
-                        ? Color.primary.opacity(0.12)
-                        : Color.primary.opacity(0.045),
+                    ? Color.primary
+                        .opacity(0.13)
+                    : Color.primary
+                        .opacity(0.045),
                     lineWidth: 1
                 )
             }
@@ -406,7 +472,8 @@ struct ContentView: View {
 
     // MARK: - Translation
 
-    private var translationSection: some View {
+    private var translationSection:
+        some View {
 
         VStack(
             alignment: .leading,
@@ -415,107 +482,160 @@ struct ContentView: View {
 
             sectionTitle(
                 "翻译",
-                systemImage: "sparkles"
+                systemImage:
+                    "sparkles"
             )
 
-            Group {
+            translationContent
+                .frame(
+                    maxWidth:
+                        .infinity,
+                    alignment:
+                        .topLeading
+                )
+                .frame(
+                    height:
+                        translationHeight,
+                    alignment:
+                        .topLeading
+                )
+                .padding(14)
+                .background {
 
-                if viewModel.isTranslating {
-
-                    loadingView
-
-                } else if let errorMessage =
-                            viewModel.errorMessage {
-
-                    errorView(
-                        errorMessage
+                    RoundedRectangle(
+                        cornerRadius: 12,
+                        style: .continuous
                     )
+                    .fill(
+                        Color.primary
+                            .opacity(0.045)
+                    )
+                }
+        }
+    }
 
-                } else if viewModel
-                    .translatedText
-                    .isEmpty {
+    @ViewBuilder
+    private var translationContent:
+        some View {
 
-                    Text("翻译结果会显示在这里")
+        if
+            let errorMessage =
+                viewModel.errorMessage {
+
+            errorView(
+                errorMessage
+            )
+
+        } else if
+            !viewModel
+                .translatedText
+                .isEmpty {
+
+            VStack(
+                alignment: .leading,
+                spacing: 8
+            ) {
+
+                CleanTextScrollView(
+                    text:
+                        viewModel
+                            .translatedText
+                )
+
+                if
+                    viewModel
+                        .isTranslating {
+
+                    HStack(spacing: 6) {
+
+                        ProgressView()
+                            .controlSize(
+                                .mini
+                            )
+
+                        Text(
+                            "正在生成…"
+                        )
                         .font(
                             .system(
-                                size: 13
+                                size: 10
                             )
                         )
                         .foregroundStyle(
                             .tertiary
                         )
-                        .frame(
-                            maxWidth:
-                                .infinity,
-                            minHeight: 44,
-                            alignment:
-                                .center
-                        )
-
-                } else {
-
-                    Text(
-                        viewModel
-                            .translatedText
-                    )
-                    .font(
-                        .system(
-                            size: 15,
-                            weight: .medium
-                        )
-                    )
-                    .lineSpacing(5)
-                    .textSelection(
-                        .enabled
-                    )
-                    .frame(
-                        maxWidth:
-                            .infinity,
-                        alignment:
-                            .topLeading
-                    )
+                    }
                 }
             }
             .frame(
-                maxWidth: .infinity,
-                minHeight: 44,
-                alignment: .topLeading
+                maxWidth:
+                    .infinity,
+                maxHeight:
+                    .infinity,
+                alignment:
+                    .topLeading
             )
-            .padding(14)
-            .background {
 
-                RoundedRectangle(
-                    cornerRadius: 12,
-                    style: .continuous
+        } else if
+            viewModel
+                .isTranslating {
+
+            loadingView
+
+        } else {
+
+            Text(
+                "翻译结果会显示在这里"
+            )
+            .font(
+                .system(
+                    size: 13
                 )
-                .fill(
-                    .primary.opacity(0.048)
-                )
-            }
+            )
+            .foregroundStyle(
+                .tertiary
+            )
+            .frame(
+                maxWidth:
+                    .infinity,
+                maxHeight:
+                    .infinity,
+                alignment:
+                    .center
+            )
         }
     }
 
-    private var loadingView: some View {
+    private var loadingView:
+        some View {
 
         HStack(spacing: 9) {
 
             ProgressView()
-                .controlSize(.small)
+                .controlSize(
+                    .small
+                )
 
-            Text("正在翻译…")
-                .font(
-                    .system(
-                        size: 13,
-                        weight: .medium
-                    )
+            Text(
+                "正在翻译…"
+            )
+            .font(
+                .system(
+                    size: 13,
+                    weight: .medium
                 )
-                .foregroundStyle(
-                    .secondary
-                )
+            )
+            .foregroundStyle(
+                .secondary
+            )
         }
         .frame(
-            minHeight: 44,
-            alignment: .leading
+            maxWidth:
+                .infinity,
+            maxHeight:
+                .infinity,
+            alignment:
+                .leading
         )
     }
 
@@ -532,7 +652,9 @@ struct ContentView: View {
                 systemName:
                     "exclamationmark.circle.fill"
             )
-            .foregroundStyle(.red)
+            .foregroundStyle(
+                .red
+            )
 
             Text(message)
                 .font(
@@ -544,24 +666,35 @@ struct ContentView: View {
                     .secondary
                 )
         }
+        .frame(
+            maxWidth:
+                .infinity,
+            maxHeight:
+                .infinity,
+            alignment:
+                .topLeading
+        )
     }
 
     // MARK: - Footer
 
-    private var footer: some View {
+    private var footer:
+        some View {
 
         HStack(spacing: 10) {
 
             Button {
 
-                viewModel.translate()
+                viewModel
+                    .translate()
 
             } label: {
 
                 HStack(spacing: 6) {
 
-                    if viewModel
-                        .isTranslating {
+                    if
+                        viewModel
+                            .isTranslating {
 
                         ProgressView()
                             .controlSize(
@@ -595,11 +728,18 @@ struct ContentView: View {
                     )
                 )
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(
+                .bordered
+            )
+            .controlSize(
+                .small
+            )
             .disabled(
-                viewModel.isTranslating ||
-                viewModel.originalText
+                viewModel
+                    .isTranslating
+                ||
+                viewModel
+                    .originalText
                     .trimmingCharacters(
                         in:
                             .whitespacesAndNewlines
@@ -608,7 +748,8 @@ struct ContentView: View {
             )
             .keyboardShortcut(
                 .return,
-                modifiers: [.command]
+                modifiers:
+                    [.command]
             )
 
             Text("⌘↩")
@@ -653,8 +794,12 @@ struct ContentView: View {
                     )
                 )
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(
+                .bordered
+            )
+            .controlSize(
+                .small
+            )
             .disabled(
                 viewModel
                     .translatedText
@@ -705,6 +850,88 @@ struct ContentView: View {
         .foregroundStyle(
             .tertiary
         )
+    }
+
+    // MARK: - Size Estimate
+
+    private func
+    estimatedOriginalLines(
+        _ text: String
+    ) -> Int {
+
+        guard !text.isEmpty else {
+            return 1
+        }
+
+        return text
+            .components(
+                separatedBy:
+                    .newlines
+            )
+            .reduce(0) {
+                result,
+                line in
+
+                let count =
+                    max(
+                        line.count,
+                        1
+                    )
+
+                let lines =
+                    Int(
+                        ceil(
+                            Double(count)
+                            / 55.0
+                        )
+                    )
+
+                return result
+                    + max(
+                        lines,
+                        1
+                    )
+            }
+    }
+
+    private func
+    estimatedTranslationLines(
+        _ text: String
+    ) -> Int {
+
+        guard !text.isEmpty else {
+            return 2
+        }
+
+        return text
+            .components(
+                separatedBy:
+                    .newlines
+            )
+            .reduce(0) {
+                result,
+                line in
+
+                let count =
+                    max(
+                        line.count,
+                        1
+                    )
+
+                let lines =
+                    Int(
+                        ceil(
+                            Double(count)
+                            / 29.0
+                        )
+                    )
+
+                return result
+                    + max(
+                        lines,
+                        1
+                    )
+            }
     }
 }
 

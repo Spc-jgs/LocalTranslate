@@ -14,37 +14,7 @@ struct LocalTranslateApp: App {
 
         MenuBarExtra {
 
-            Button(
-                "显示翻译窗口"
-            ) {
-
-                NotificationCenter
-                    .default
-                    .post(
-                        name:
-                            .showTranslatePanel,
-                        object: nil
-                    )
-            }
-
-            Divider()
-
-            SettingsLink {
-
-                Label(
-                    "设置…",
-                    systemImage: "gear"
-                )
-            }
-
-            Divider()
-
-            Button(
-                "退出 Local Translate"
-            ) {
-
-                NSApp.terminate(nil)
-            }
+            MenuBarContent()
 
         } label: {
 
@@ -60,7 +30,89 @@ struct LocalTranslateApp: App {
     }
 }
 
-// MARK: - AppDelegate
+// MARK: - Menu Bar
+
+private struct MenuBarContent: View {
+
+    @Environment(\.openSettings)
+    private var openSettings
+
+    var body: some View {
+
+        Button(
+            "显示翻译窗口"
+        ) {
+
+            NotificationCenter
+                .default
+                .post(
+                    name:
+                        .showTranslatePanel,
+                    object: nil
+                )
+        }
+
+        Divider()
+
+        Button {
+
+            openSettings()
+
+            NSApp.activate(
+                ignoringOtherApps: true
+            )
+
+            DispatchQueue
+                .main
+                .asyncAfter(
+                    deadline:
+                        .now() + 0.08
+                ) {
+
+                    NSApp.activate(
+                        ignoringOtherApps:
+                            true
+                    )
+
+                    let settingsWindow =
+                        NSApp.windows.first {
+                            window in
+
+                            window.isVisible
+                            &&
+                            !(window is NSPanel)
+                        }
+
+                    settingsWindow?
+                        .makeKeyAndOrderFront(
+                            nil
+                        )
+
+                    settingsWindow?
+                        .orderFrontRegardless()
+                }
+
+        } label: {
+
+            Label(
+                "设置…",
+                systemImage: "gear"
+            )
+        }
+        .keyboardShortcut(",")
+
+        Divider()
+
+        Button(
+            "退出 Local Translate"
+        ) {
+
+            NSApp.terminate(nil)
+        }
+    }
+}
+
+// MARK: - App Delegate
 
 @MainActor
 final class AppDelegate:
@@ -79,37 +131,43 @@ final class AppDelegate:
     private let viewModel =
         TranslationViewModel()
 
-    // MARK: Launch
+    // 记录上一次真正应用到窗口的高度，
+    // 避免重复 resize。
+    private var lastPanelHeight:
+        CGFloat = 390
+
+    // MARK: - Launch
 
     func applicationDidFinishLaunching(
         _ notification: Notification
     ) {
 
-        // 菜单栏后台工具，
-        // 不显示 Dock 图标
         NSApp.setActivationPolicy(
             .accessory
         )
 
-        // 创建悬浮窗口
         let panel =
             FloatingPanel(
                 content:
                     ContentView(
                         viewModel:
                             viewModel
+                    ),
+                size:
+                    NSSize(
+                        width: 520,
+                        height: 390
                     )
             )
 
         self.panel = panel
 
-        // 动态高度
+        lastPanelHeight = 390
+
         observeContentSize()
 
-        // Pin 状态
         observePinState()
 
-        // 全局快捷键
         let hotKeyManager =
             HotKeyManager()
 
@@ -123,39 +181,55 @@ final class AppDelegate:
         self.hotKeyManager =
             hotKeyManager
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(
-                handleShowTranslatePanelNotification
-            ),
-            name: .showTranslatePanel,
-            object: nil
-        )
+        NotificationCenter
+            .default
+            .addObserver(
+                self,
+                selector:
+                    #selector(
+                        handleShowTranslatePanelNotification
+                    ),
+                name:
+                    .showTranslatePanel,
+                object: nil
+            )
     }
 
     func applicationWillTerminate(
         _ notification: Notification
     ) {
-        NotificationCenter.default.removeObserver(
-            self
-        )
+
+        NotificationCenter
+            .default
+            .removeObserver(
+                self
+            )
     }
-    
+
+    // MARK: - Menu Notification
+
     @objc
-    private func handleShowTranslatePanelNotification(
+    private func
+    handleShowTranslatePanelNotification(
         _ notification: Notification
     ) {
-        viewModel.prepareManualInput(
-            clearExisting: false
-        )
+
+        viewModel
+            .prepareManualInput(
+                clearExisting: false
+            )
 
         showPanel(
             reposition: true,
             activateApp: true
         )
 
-        DispatchQueue.main.async { [weak self] in
-            self?.viewModel.requestInputFocus()
+        DispatchQueue.main.async {
+            [weak self] in
+
+            self?
+                .viewModel
+                .requestInputFocus()
         }
     }
 
@@ -173,12 +247,6 @@ final class AppDelegate:
             return
         }
 
-        // --------------------------------
-        // 模式 1：
-        // 当前 App 有选中文字
-        // → 自动抓取 + 自动翻译
-        // --------------------------------
-
         if let selectedText =
             SelectedTextReader.read() {
 
@@ -187,8 +255,6 @@ final class AppDelegate:
                     selectedText
                 )
 
-            // Pin 状态下如果窗口已经显示，
-            // 保留用户手动摆放的位置。
             showPanel(
                 reposition:
                     !viewModel.isPinned,
@@ -199,12 +265,6 @@ final class AppDelegate:
 
             return
         }
-
-        // --------------------------------
-        // 模式 2：
-        // 没有选中文字
-        // → 打开手动输入模式
-        // --------------------------------
 
         viewModel
             .prepareManualInput(
@@ -217,17 +277,13 @@ final class AppDelegate:
             activateApp: true
         )
 
-        // 等窗口变成 key window 后，
-        // 再把焦点交给 TextEditor。
-        DispatchQueue
-            .main
-            .async {
-                [weak self] in
+        DispatchQueue.main.async {
+            [weak self] in
 
-                self?
-                    .viewModel
-                    .requestInputFocus()
-            }
+            self?
+                .viewModel
+                .requestInputFocus()
+        }
     }
 
     // MARK: - Panel
@@ -241,10 +297,9 @@ final class AppDelegate:
             return
         }
 
-        // 如果窗口当前是隐藏的，
-        // 即使处于 Pin 状态，
-        // 也重新定位一次。
-        if reposition ||
+        if
+            reposition
+            ||
             !panel.isVisible {
 
             positionPanelNearMouse(
@@ -286,7 +341,6 @@ final class AppDelegate:
         guard let screen else {
 
             panel.center()
-
             return
         }
 
@@ -299,7 +353,6 @@ final class AppDelegate:
         let gap: CGFloat = 18
         let margin: CGFloat = 16
 
-        // 默认鼠标右下方
         var x =
             mouseLocation.x
             + gap
@@ -309,9 +362,8 @@ final class AppDelegate:
             - panelSize.height
             - gap
 
-        // 右边不够
-        // → 左边
-        if x + panelSize.width
+        if
+            x + panelSize.width
             >
             visibleFrame.maxX
             - margin {
@@ -322,8 +374,9 @@ final class AppDelegate:
                 - gap
         }
 
-        // 左侧越界保护
-        if x <
+        if
+            x
+            <
             visibleFrame.minX
             + margin {
 
@@ -332,9 +385,9 @@ final class AppDelegate:
                 + margin
         }
 
-        // 下方不够
-        // → 上方
-        if y <
+        if
+            y
+            <
             visibleFrame.minY
             + margin {
 
@@ -343,9 +396,8 @@ final class AppDelegate:
                 + gap
         }
 
-        // 顶部越界保护
-        if y
-            + panelSize.height
+        if
+            y + panelSize.height
             >
             visibleFrame.maxY
             - margin {
@@ -375,7 +427,8 @@ final class AppDelegate:
                 on: RunLoop.main
             )
             .sink {
-                [weak self] isPinned in
+                [weak self]
+                isPinned in
 
                 guard
                     let panel =
@@ -387,7 +440,9 @@ final class AppDelegate:
                 panel.isPinned =
                     isPinned
 
-                if isPinned &&
+                if
+                    isPinned
+                    &&
                     panel.isVisible {
 
                     panel
@@ -447,26 +502,14 @@ final class AppDelegate:
             return
         }
 
+        // MARK: Original
+
         let originalLines =
             estimatedLines(
                 for: original,
-                charactersPerLine:
-                    58
+                charactersPerLine: 55
             )
 
-        let translationLines =
-            loading
-            ? 2
-            : estimatedLines(
-                for:
-                    translated,
-                charactersPerLine:
-                    30
-            )
-
-        // 输入框最少 3 行，
-        // 最多按 7 行算高度，
-        // 再长就让 TextEditor 自己滚动。
         let visibleOriginalLines =
             min(
                 max(
@@ -476,38 +519,96 @@ final class AppDelegate:
                 7
             )
 
+        let originalExtraLines =
+            max(
+                visibleOriginalLines - 3,
+                0
+            )
+
+        // MARK: Translation
+
+        let translationLines =
+            estimatedLines(
+                for: translated,
+                charactersPerLine: 29
+            )
+
         let visibleTranslationLines =
             min(
                 max(
                     translationLines,
-                    2
+                    3
                 ),
-                11
+                9
             )
 
-        let originalHeight =
-            CGFloat(
-                visibleOriginalLines
-            ) * 20
+        let translationExtraLines =
+            max(
+                visibleTranslationLines - 3,
+                0
+            )
 
-        let translationHeight =
+        // MARK: Target Height
+
+        let baseHeight:
+            CGFloat = 390
+
+        let originalExtraHeight =
             CGFloat(
-                visibleTranslationLines
+                originalExtraLines
+            ) * 19
+
+        let translationExtraHeight =
+            CGFloat(
+                translationExtraLines
             ) * 24
 
-        let desiredHeight =
-            155
-            + originalHeight
-            + translationHeight
+        var desiredHeight =
+            baseHeight
+            + originalExtraHeight
+            + translationExtraHeight
+
+        if
+            loading
+            &&
+            translated.isEmpty {
+
+            desiredHeight =
+                max(
+                    desiredHeight,
+                    baseHeight
+                )
+        }
 
         let finalHeight =
             min(
                 max(
                     desiredHeight,
-                    300
+                    390
                 ),
-                540
+                560
             )
+
+        // --------------------------------
+        // 关键：
+        // 空 → 第一个字
+        // 第一个字 → 空
+        //
+        // 目标高度仍然是 390，
+        // 所以完全不触碰 NSPanel frame。
+        // --------------------------------
+
+        guard
+            abs(
+                finalHeight
+                - lastPanelHeight
+            ) >= 8
+        else {
+            return
+        }
+
+        lastPanelHeight =
+            finalHeight
 
         resizePanel(
             panel,
@@ -543,9 +644,7 @@ final class AppDelegate:
                 let lines =
                     Int(
                         ceil(
-                            Double(
-                                length
-                            )
+                            Double(length)
                             /
                             Double(
                                 charactersPerLine
@@ -566,10 +665,11 @@ final class AppDelegate:
         toHeight height: CGFloat
     ) {
 
-        guard abs(
-            panel.frame.height
-            - height
-        ) > 2
+        guard
+            abs(
+                panel.frame.height
+                - height
+            ) >= 8
         else {
             return
         }
@@ -577,8 +677,6 @@ final class AppDelegate:
         var frame =
             panel.frame
 
-        // 保持顶部位置不动，
-        // 向下伸缩。
         let top =
             frame.maxY
 
@@ -594,7 +692,8 @@ final class AppDelegate:
             let visible =
                 screen.visibleFrame
 
-            if frame.minY
+            if
+                frame.minY
                 <
                 visible.minY
                 + 12 {
@@ -604,7 +703,8 @@ final class AppDelegate:
                     + 12
             }
 
-            if frame.maxY
+            if
+                frame.maxY
                 >
                 visible.maxY
                 - 12 {
@@ -616,10 +716,12 @@ final class AppDelegate:
             }
         }
 
+        // 不使用 NSWindow 动画。
+        // 输入和 Streaming 时不会产生抖动。
         panel.setFrame(
             frame,
             display: true,
-            animate: true
+            animate: false
         )
     }
 }
