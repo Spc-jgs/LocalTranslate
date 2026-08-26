@@ -3,11 +3,19 @@ import AppKit
 
 final class FloatingPanel: NSPanel {
 
+    var isPinned = false
+
     init<Content: View>(
         content: Content,
-        size: NSSize = NSSize(width: 500, height: 355)
+        size: NSSize = NSSize(
+            width: 520,
+            height: 320
+        )
     ) {
-        let hostingView = NSHostingView(rootView: content)
+
+        let hostingView = NSHostingView(
+            rootView: content
+        )
 
         hostingView.frame = NSRect(
             origin: .zero,
@@ -29,35 +37,33 @@ final class FloatingPanel: NSPanel {
 
         contentView = hostingView
 
-        // 悬浮在普通窗口之上
+        // 始终位于普通窗口之上
         level = .floating
 
-        // 真正的浮动面板
         isFloatingPanel = true
 
-        // 背景由 SwiftUI 自己画
+        // SwiftUI 自己负责背景
         backgroundColor = .clear
         isOpaque = false
 
-        // macOS 阴影
         hasShadow = true
 
-        // 可以点击 SwiftUI 内部控件
+        // 允许 SwiftUI 控件获取焦点
         becomesKeyOnlyIfNeeded = false
 
-        // 可以拖动整个窗口
+        // Header 等空白区域可拖动
         isMovableByWindowBackground = true
 
-        // 关闭后对象不释放，后面快捷键还能重新唤起
+        // 隐藏之后对象仍然保留
         isReleasedWhenClosed = false
 
-        // 可以出现在所有桌面
+        hidesOnDeactivate = false
+
         collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary
         ]
 
-        // 小工具式动画
         animationBehavior = .utilityWindow
     }
 
@@ -69,14 +75,24 @@ final class FloatingPanel: NSPanel {
         false
     }
 
-    // 按 Esc
-    override func cancelOperation(_ sender: Any?) {
+    // Esc 始终可以隐藏
+    override func cancelOperation(
+        _ sender: Any?
+    ) {
         orderOut(nil)
     }
 
-    // 点击其他 App / 窗口
+    // 点击其他 App：
+    //
+    // 未钉住 → 自动隐藏
+    // 已钉住   → 保持显示
     override func resignKey() {
+
         super.resignKey()
+
+        guard !isPinned else {
+            return
+        }
 
         DispatchQueue.main.async { [weak self] in
             self?.orderOut(nil)
