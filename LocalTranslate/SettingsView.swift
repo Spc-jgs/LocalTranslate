@@ -12,6 +12,12 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.keepAlive)
     private var keepAlive = AppSettings.defaultKeepAlive
 
+    @AppStorage(AppSettings.Key.translationStyle)
+    private var translationStyleRaw = AppSettings.defaultTranslationStyleRaw
+
+    @AppStorage(AppSettings.Key.customPrompt)
+    private var customPrompt = AppSettings.defaultCustomPrompt
+
     @State
     private var installedModels: [OllamaInstalledModel] = []
 
@@ -36,6 +42,12 @@ struct SettingsView: View {
         }
     }
 
+    private var selectedTranslationStyle: TranslationStyle {
+        TranslationStyle(
+            rawValue: translationStyleRaw
+        ) ?? .standard
+    }
+
     var body: some View {
 
         VStack(spacing: 0) {
@@ -55,6 +67,8 @@ struct SettingsView: View {
                     connectionSection
 
                     modelSection
+
+                    translationSection
 
                     runtimeSection
 
@@ -360,6 +374,134 @@ struct SettingsView: View {
                                 format.uppercased()
                         )
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Translation
+
+    private var translationSection: some View {
+
+        settingsSection(
+            title: "翻译",
+            systemImage: "text.bubble"
+        ) {
+
+            VStack(
+                alignment: .leading,
+                spacing: 12
+            ) {
+
+                settingsRow(
+                    title: "默认风格"
+                ) {
+
+                    Picker(
+                        "",
+                        selection: $translationStyleRaw
+                    ) {
+
+                        ForEach(
+                            TranslationStyle.allCases
+                        ) { style in
+
+                            Text(style.title)
+                                .tag(style.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 170)
+                }
+
+                Text(
+                    selectedTranslationStyle.shortDescription
+                )
+                .font(
+                    .system(size: 10)
+                )
+                .foregroundStyle(.tertiary)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
+
+                rowDivider
+
+                VStack(
+                    alignment: .leading,
+                    spacing: 7
+                ) {
+
+                    HStack {
+
+                        Text("自定义 Prompt")
+                            .font(
+                                .system(size: 12)
+                            )
+                            .foregroundStyle(.secondary)
+
+                        Spacer()
+
+                        Text(
+                            selectedTranslationStyle == .custom
+                            ? "当前生效"
+                            : "选择“自定义”时生效"
+                        )
+                        .font(
+                            .system(size: 9)
+                        )
+                        .foregroundStyle(
+                            selectedTranslationStyle == .custom
+                            ? .secondary
+                            : .tertiary
+                        )
+                    }
+
+                    TextField(
+                        "例如：保持互联网口语风格，表达自然，不要过度正式。",
+                        text: $customPrompt,
+                        axis: .vertical
+                    )
+                    .textFieldStyle(.plain)
+                    .font(
+                        .system(size: 11)
+                    )
+                    .lineLimit(4...7)
+                    .padding(10)
+                    .background {
+
+                        RoundedRectangle(
+                            cornerRadius: 9,
+                            style: .continuous
+                        )
+                        .fill(
+                            Color.primary.opacity(0.028)
+                        )
+                    }
+                    .overlay {
+
+                        RoundedRectangle(
+                            cornerRadius: 9,
+                            style: .continuous
+                        )
+                        .stroke(
+                            Color.primary.opacity(0.05),
+                            lineWidth: 1
+                        )
+                    }
+
+                    Text(
+                        "自定义 Prompt 只作为附加风格指令，不会覆盖 Local Translate 的基础翻译规则、翻译方向和代码保护规则。留空时等同于默认风格。"
+                    )
+                    .font(
+                        .system(size: 9)
+                    )
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(
+                        horizontal: false,
+                        vertical: true
+                    )
                 }
             }
         }

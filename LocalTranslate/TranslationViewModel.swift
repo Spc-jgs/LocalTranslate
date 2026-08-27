@@ -3,18 +3,36 @@ import Combine
 import AppKit
 
 @MainActor
-final class TranslationViewModel: ObservableObject {
+final class TranslationViewModel:
+    ObservableObject {
 
-    @Published var originalText = ""
-    @Published var translatedText = ""
+    @Published
+    var originalText =
+        ""
 
-    @Published var isTranslating = false
-    @Published var copied = false
-    @Published var isPinned = false
+    @Published
+    var translatedText =
+        ""
 
-    @Published var errorMessage: String?
+    @Published
+    var isTranslating =
+        false
 
-    @Published var inputFocusRequest = 0
+    @Published
+    var copied =
+        false
+
+    @Published
+    var isPinned =
+        false
+
+    @Published
+    var errorMessage:
+        String?
+
+    @Published
+    var inputFocusRequest =
+        0
 
     private var translationTask:
         Task<Void, Never>?
@@ -27,28 +45,40 @@ final class TranslationViewModel: ObservableObject {
 
         cancelTranslation()
 
-        originalText = text
-        translatedText = ""
-        errorMessage = nil
+        originalText =
+            text
+
+        translatedText =
+            ""
+
+        errorMessage =
+            nil
     }
 
     // MARK: - Manual Input
 
     func prepareManualInput(
-        clearExisting: Bool = false
+        clearExisting:
+            Bool = false
     ) {
 
         cancelTranslation()
 
-        errorMessage = nil
+        errorMessage =
+            nil
 
         if clearExisting {
-            originalText = ""
-            translatedText = ""
+
+            originalText =
+                ""
+
+            translatedText =
+                ""
         }
     }
 
     func requestInputFocus() {
+
         inputFocusRequest += 1
     }
 
@@ -56,24 +86,37 @@ final class TranslationViewModel: ObservableObject {
         _ text: String
     ) {
 
-        guard text != originalText else {
+        guard
+            text != originalText
+        else {
+
             return
         }
 
         cancelTranslation()
 
-        originalText = text
-        translatedText = ""
-        errorMessage = nil
+        originalText =
+            text
+
+        translatedText =
+            ""
+
+        errorMessage =
+            nil
     }
 
     func clearAll() {
 
         cancelTranslation()
 
-        originalText = ""
-        translatedText = ""
-        errorMessage = nil
+        originalText =
+            ""
+
+        translatedText =
+            ""
+
+        errorMessage =
+            nil
 
         requestInputFocus()
     }
@@ -89,7 +132,9 @@ final class TranslationViewModel: ObservableObject {
                         .whitespacesAndNewlines
                 )
 
-        guard !text.isEmpty else {
+        guard
+            !text.isEmpty
+        else {
 
             errorMessage =
                 "请输入需要翻译的内容"
@@ -99,16 +144,39 @@ final class TranslationViewModel: ObservableObject {
             return
         }
 
+        // 在一次翻译开始时，
+        // 固定本次请求的翻译风格。
+        //
+        // 即使用户在 Streaming 中途
+        // 去设置页修改风格，
+        // 当前请求也不会突然改变。
+        let translationStyle =
+            AppSettings
+                .translationStyle
+
+        let customPrompt =
+            AppSettings
+                .customPrompt
+
         cancelTranslation()
 
-        translatedText = ""
-        errorMessage = nil
-        isTranslating = true
+        translatedText =
+            ""
+
+        errorMessage =
+            nil
+
+        isTranslating =
+            true
 
         translationTask =
-            Task { [weak self] in
+            Task {
+                [weak self] in
 
-                guard let self else {
+                guard
+                    let self
+                else {
+
                     return
                 }
 
@@ -118,7 +186,11 @@ final class TranslationViewModel: ObservableObject {
                         try await
                         OllamaClient.shared
                             .translateStream(
-                                text
+                                text,
+                                style:
+                                    translationStyle,
+                                customPrompt:
+                                    customPrompt
                             ) {
                                 [weak self]
                                 partialResult in
@@ -126,6 +198,7 @@ final class TranslationViewModel: ObservableObject {
                                 guard
                                     let self
                                 else {
+
                                     return
                                 }
 
@@ -137,12 +210,14 @@ final class TranslationViewModel: ObservableObject {
                                                 .whitespacesAndNewlines
                                         )
 
-                                // 用户中途已经改了原文，
-                                // 不再接收旧流。
+                                // 用户中途修改了原文，
+                                // 旧翻译流失效。
                                 guard
                                     currentText
-                                    == text
+                                    ==
+                                    text
                                 else {
+
                                     return
                                 }
 
@@ -153,19 +228,24 @@ final class TranslationViewModel: ObservableObject {
                     guard
                         !Task.isCancelled
                     else {
+
                         return
                     }
 
                     let currentText =
-                        self.originalText
+                        self
+                            .originalText
                             .trimmingCharacters(
                                 in:
                                     .whitespacesAndNewlines
                             )
 
                     guard
-                        currentText == text
+                        currentText
+                        ==
+                        text
                     else {
+
                         return
                     }
 
@@ -191,6 +271,7 @@ final class TranslationViewModel: ObservableObject {
                     guard
                         !Task.isCancelled
                     else {
+
                         return
                     }
 
@@ -208,15 +289,20 @@ final class TranslationViewModel: ObservableObject {
 
     private func cancelTranslation() {
 
-        translationTask?.cancel()
-        translationTask = nil
+        translationTask?
+            .cancel()
 
-        isTranslating = false
+        translationTask =
+            nil
+
+        isTranslating =
+            false
     }
 
     // MARK: - Pin
 
     func togglePinned() {
+
         isPinned.toggle()
     }
 
@@ -225,21 +311,27 @@ final class TranslationViewModel: ObservableObject {
     func copyTranslation() {
 
         guard
-            !translatedText.isEmpty
+            !translatedText
+                .isEmpty
         else {
+
             return
         }
 
-        NSPasteboard.general
+        NSPasteboard
+            .general
             .clearContents()
 
-        NSPasteboard.general
+        NSPasteboard
+            .general
             .setString(
                 translatedText,
-                forType: .string
+                forType:
+                    .string
             )
 
-        copied = true
+        copied =
+            true
 
         DispatchQueue.main
             .asyncAfter(
@@ -248,7 +340,9 @@ final class TranslationViewModel: ObservableObject {
             ) {
                 [weak self] in
 
-                self?.copied = false
+                self?
+                    .copied =
+                    false
             }
     }
 }

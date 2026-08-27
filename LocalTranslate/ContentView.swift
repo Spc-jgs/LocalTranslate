@@ -10,6 +10,10 @@ struct ContentView: View {
     private var model =
         AppSettings.defaultModel
 
+    @AppStorage(AppSettings.Key.translationStyle)
+    private var translationStyleRaw =
+        AppSettings.defaultTranslationStyleRaw
+
     @FocusState
     private var inputFocused: Bool
 
@@ -38,6 +42,12 @@ struct ContentView: View {
     private var copyFeedbackVisible: Bool {
         viewModel.copied
         || resultCopied
+    }
+
+    private var selectedTranslationStyle: TranslationStyle {
+        TranslationStyle(
+            rawValue: translationStyleRaw
+        ) ?? .standard
     }
 
     // MARK: - Input Height
@@ -427,6 +437,8 @@ struct ContentView: View {
 
                 Spacer()
 
+                styleMenu
+
                 if
                     !viewModel
                         .originalText
@@ -515,6 +527,91 @@ struct ContentView: View {
                 )
             }
         }
+    }
+
+    // MARK: - Translation Style Menu
+
+    private var styleMenu: some View {
+
+        Menu {
+
+            ForEach(
+                TranslationStyle.allCases
+            ) { style in
+
+                Button {
+
+                    translationStyleRaw =
+                        style.rawValue
+
+                } label: {
+
+                    if style == selectedTranslationStyle {
+
+                        Label(
+                            style.title,
+                            systemImage: "checkmark"
+                        )
+
+                    } else {
+
+                        Text(style.title)
+                    }
+                }
+            }
+
+        } label: {
+
+            HStack(spacing: 4) {
+
+                Text(
+                    selectedTranslationStyle.title
+                )
+
+                Image(
+                    systemName: "chevron.down"
+                )
+                .font(
+                    .system(
+                        size: 7,
+                        weight: .semibold
+                    )
+                )
+            }
+            .font(
+                .system(
+                    size: 10,
+                    weight: .medium
+                )
+            )
+            .foregroundStyle(.secondary)
+            .padding(
+                .horizontal,
+                7
+            )
+            .padding(
+                .vertical,
+                4
+            )
+            .background {
+
+                RoundedRectangle(
+                    cornerRadius: 6,
+                    style: .continuous
+                )
+                .fill(
+                    Color.primary.opacity(0.045)
+                )
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(
+            viewModel.isTranslating
+        )
+        .help(
+            selectedTranslationStyle.shortDescription
+        )
     }
 
     // MARK: - Translation

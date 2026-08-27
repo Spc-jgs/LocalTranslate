@@ -11,12 +11,17 @@ struct OllamaChatRequest: Encodable {
     let think: Bool
     let keepAlive: String
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys:
+        String,
+        CodingKey {
+
         case model
         case messages
         case stream
         case think
-        case keepAlive = "keep_alive"
+
+        case keepAlive =
+            "keep_alive"
     }
 }
 
@@ -26,7 +31,8 @@ struct OllamaMessage: Codable {
     let content: String
 }
 
-private struct OllamaStreamResponse: Decodable {
+private struct OllamaStreamResponse:
+    Decodable {
 
     let message: OllamaMessage?
     let done: Bool?
@@ -34,7 +40,8 @@ private struct OllamaStreamResponse: Decodable {
 
 // MARK: - Show Request
 
-private struct OllamaShowRequest: Encodable {
+private struct OllamaShowRequest:
+    Encodable {
 
     let model: String
     let verbose: Bool
@@ -42,7 +49,9 @@ private struct OllamaShowRequest: Encodable {
 
 // MARK: - Installed Model
 
-struct OllamaInstalledModel: Identifiable, Hashable {
+struct OllamaInstalledModel:
+    Identifiable,
+    Hashable {
 
     var id: String {
         name
@@ -68,44 +77,62 @@ struct OllamaInstalledModel: Identifiable, Hashable {
 
 // MARK: - Model Diagnostics
 
-struct OllamaModelDiagnostics: Equatable {
+struct OllamaModelDiagnostics:
+    Equatable {
 
-    let nativeContextLength: Int?
+    let nativeContextLength:
+        Int?
 
-    let runtimeContextLength: Int?
+    let runtimeContextLength:
+        Int?
 
-    let runtimeMemoryBytes: Int64?
+    let runtimeMemoryBytes:
+        Int64?
 
-    let isRunning: Bool
+    let isRunning:
+        Bool
 
-    // 当前 Ollama API 没有直接暴露
+    // 当前 Ollama API
+    // 没有直接暴露
     // OLLAMA_KV_CACHE_TYPE。
-    let kvCacheQuantization: String?
+    let kvCacheQuantization:
+        String?
 }
 
 // MARK: - Tags API
 
-private struct OllamaTagsResponse: Decodable {
+private struct OllamaTagsResponse:
+    Decodable {
 
-    let models: [OllamaTagModel]
+    let models:
+        [OllamaTagModel]
 }
 
-private struct OllamaTagModel: Decodable {
+private struct OllamaTagModel:
+    Decodable {
 
     let name: String
     let size: Int64
-    let details: OllamaTagDetails?
+
+    let details:
+        OllamaTagDetails?
 }
 
-private struct OllamaTagDetails: Decodable {
+private struct OllamaTagDetails:
+    Decodable {
 
     let format: String?
     let family: String?
 
-    let parameterSize: String?
-    let quantizationLevel: String?
+    let parameterSize:
+        String?
 
-    enum CodingKeys: String, CodingKey {
+    let quantizationLevel:
+        String?
+
+    enum CodingKeys:
+        String,
+        CodingKey {
 
         case format
         case family
@@ -120,22 +147,30 @@ private struct OllamaTagDetails: Decodable {
 
 // MARK: - PS API
 
-private struct OllamaPSResponse: Decodable {
+private struct OllamaPSResponse:
+    Decodable {
 
-    let models: [OllamaRunningModel]
+    let models:
+        [OllamaRunningModel]
 }
 
-private struct OllamaRunningModel: Decodable {
+private struct OllamaRunningModel:
+    Decodable {
 
     let name: String
     let model: String?
 
     let size: Int64
 
-    let sizeVRAM: Int64?
-    let contextLength: Int?
+    let sizeVRAM:
+        Int64?
 
-    enum CodingKeys: String, CodingKey {
+    let contextLength:
+        Int?
+
+    enum CodingKeys:
+        String,
+        CodingKey {
 
         case name
         case model
@@ -202,26 +237,38 @@ private enum TranslationDirection {
 
 // MARK: - Errors
 
-enum OllamaClientError: LocalizedError {
+enum OllamaClientError:
+    LocalizedError {
 
     case invalidURL
-    case invalidResponse(statusCode: Int)
+
+    case invalidResponse(
+        statusCode: Int
+    )
+
     case noModels
 
-    var errorDescription: String? {
+    var errorDescription:
+        String? {
 
         switch self {
 
         case .invalidURL:
-            return "Ollama 地址无效"
+
+            return
+                "Ollama 地址无效"
 
         case .invalidResponse(
             let statusCode
         ):
-            return "Ollama 请求失败，HTTP \(statusCode)"
+
+            return
+                "Ollama 请求失败，HTTP \(statusCode)"
 
         case .noModels:
-            return "没有找到已安装的 Ollama 模型"
+
+            return
+                "没有找到已安装的 Ollama 模型"
         }
     }
 }
@@ -240,6 +287,8 @@ final class OllamaClient {
 
     func translateStream(
         _ text: String,
+        style: TranslationStyle,
+        customPrompt: String,
         onPartialResult:
             @escaping
             @MainActor
@@ -247,27 +296,35 @@ final class OllamaClient {
             (String) -> Void
     ) async throws -> String {
 
-        let url = try makeURL(
-            path: "/api/chat"
-        )
+        let url =
+            try makeURL(
+                path: "/api/chat"
+            )
 
         let direction =
             detectDirection(
                 text
             )
 
+        let finalSystemPrompt =
+            makeTranslationSystemPrompt(
+                direction: direction,
+                style: style,
+                customPrompt:
+                    customPrompt
+            )
+
         let body =
             OllamaChatRequest(
                 model:
                     AppSettings.model,
+
                 messages: [
 
                     OllamaMessage(
                         role: "system",
                         content:
-                            systemPrompt
-                            + "\n\n"
-                            + direction.instruction
+                            finalSystemPrompt
                     ),
 
                     OllamaMessage(
@@ -279,8 +336,11 @@ final class OllamaClient {
                         """
                     )
                 ],
+
                 stream: true,
+
                 think: false,
+
                 keepAlive:
                     AppSettings.keepAlive
             )
@@ -302,13 +362,19 @@ final class OllamaClient {
 
         request.httpBody =
             try JSONEncoder()
-                .encode(body)
+                .encode(
+                    body
+                )
 
-        let (bytes, response) =
+        let (
+            bytes,
+            response
+        ) =
             try await
-            URLSession.shared.bytes(
-                for: request
-            )
+            URLSession.shared
+                .bytes(
+                    for: request
+                )
 
         guard
             let httpResponse =
@@ -316,10 +382,11 @@ final class OllamaClient {
                 as? HTTPURLResponse
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode: -1
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode: -1
+                    )
         }
 
         guard
@@ -330,15 +397,17 @@ final class OllamaClient {
                 )
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode:
-                        httpResponse
-                            .statusCode
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode:
+                            httpResponse
+                                .statusCode
+                    )
         }
 
-        var completeText = ""
+        var completeText =
+            ""
 
         for try await line
             in bytes.lines {
@@ -347,22 +416,26 @@ final class OllamaClient {
                 .checkCancellation()
 
             let trimmedLine =
-                line.trimmingCharacters(
-                    in:
-                        .whitespacesAndNewlines
-                )
+                line
+                    .trimmingCharacters(
+                        in:
+                            .whitespacesAndNewlines
+                    )
 
             guard
-                !trimmedLine.isEmpty
+                !trimmedLine
+                    .isEmpty
             else {
                 continue
             }
 
             guard
                 let data =
-                    trimmedLine.data(
-                        using: .utf8
-                    )
+                    trimmedLine
+                        .data(
+                            using:
+                                .utf8
+                        )
             else {
                 continue
             }
@@ -401,15 +474,127 @@ final class OllamaClient {
             )
     }
 
+    // MARK: - Prompt Composition
+
+    private func
+    makeTranslationSystemPrompt(
+        direction:
+            TranslationDirection,
+        style:
+            TranslationStyle,
+        customPrompt:
+            String
+    ) -> String {
+
+        let basePrompt =
+            systemPrompt
+            + "\n\n"
+            + direction.instruction
+
+        // 默认风格必须最大程度保持
+        // 当前已经稳定的翻译行为。
+        guard
+            style != .standard
+        else {
+
+            return basePrompt
+        }
+
+        let styleInstruction:
+            String
+
+        switch style {
+
+        case .standard:
+
+            return basePrompt
+
+        case .custom:
+
+            let trimmedCustomPrompt =
+                customPrompt
+                    .trimmingCharacters(
+                        in:
+                            .whitespacesAndNewlines
+                    )
+
+            // 自定义为空时，
+            // 效果等同默认翻译。
+            guard
+                !trimmedCustomPrompt
+                    .isEmpty
+            else {
+
+                return basePrompt
+            }
+
+            styleInstruction =
+                """
+                用户选择了“自定义”翻译风格。
+
+                以下内容是用户希望应用到译文表达方式上的附加偏好：
+
+                --- 用户自定义风格开始 ---
+
+                \(trimmedCustomPrompt)
+
+                --- 用户自定义风格结束 ---
+                """
+
+        default:
+
+            guard
+                let instruction =
+                    style
+                        .promptInstruction
+            else {
+
+                return basePrompt
+            }
+
+            styleInstruction =
+                instruction
+        }
+
+        return basePrompt
+        + "\n\n"
+        + """
+        【翻译风格附加指令】
+
+        \(styleInstruction)
+
+        【风格指令优先级】
+
+        上面的翻译风格只允许影响译文的表达方式。
+
+        不得因为风格指令而改变：
+        - 翻译方向
+        - 原文事实
+        - 原文含义
+        - 信息完整性
+        - 技术准确性
+        - 代码与标识符保护规则
+        - Markdown 与代码块保护规则
+        - 输出格式要求
+
+        如果风格指令与前面的基础翻译规则发生冲突，
+        必须以前面的基础翻译规则为准。
+
+        最终仍然只输出翻译完成后的文本，
+        不得解释使用了什么风格。
+        """
+    }
+
     // MARK: - Installed Models
 
     func installedModels()
         async throws
         -> [OllamaInstalledModel] {
 
-        let url = try makeURL(
-            path: "/api/tags"
-        )
+        let url =
+            try makeURL(
+                path: "/api/tags"
+            )
 
         let request =
             URLRequest(
@@ -417,11 +602,15 @@ final class OllamaClient {
                 timeoutInterval: 10
             )
 
-        let (data, response) =
+        let (
+            data,
+            response
+        ) =
             try await
-            URLSession.shared.data(
-                for: request
-            )
+            URLSession.shared
+                .data(
+                    for: request
+                )
 
         guard
             let httpResponse =
@@ -429,10 +618,11 @@ final class OllamaClient {
                 as? HTTPURLResponse
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode: -1
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode: -1
+                    )
         }
 
         guard
@@ -443,12 +633,13 @@ final class OllamaClient {
                 )
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode:
-                        httpResponse
-                            .statusCode
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode:
+                            httpResponse
+                                .statusCode
+                    )
         }
 
         let result =
@@ -462,6 +653,7 @@ final class OllamaClient {
             .map { model in
 
                 OllamaInstalledModel(
+
                     name:
                         model.name,
 
@@ -469,19 +661,23 @@ final class OllamaClient {
                         model.size,
 
                     parameterSize:
-                        model.details?
+                        model
+                            .details?
                             .parameterSize,
 
                     quantizationLevel:
-                        model.details?
+                        model
+                            .details?
                             .quantizationLevel,
 
                     family:
-                        model.details?
+                        model
+                            .details?
                             .family,
 
                     format:
-                        model.details?
+                        model
+                            .details?
                             .format
                 )
             }
@@ -505,7 +701,9 @@ final class OllamaClient {
             installedModels()
 
         return models
-            .map(\.name)
+            .map(
+                \.name
+            )
     }
 
     // MARK: - Model Diagnostics
@@ -518,7 +716,8 @@ final class OllamaClient {
         let nativeContext =
             try await
             nativeContextLength(
-                for: modelName
+                for:
+                    modelName
             )
 
         let runningModels =
@@ -529,11 +728,13 @@ final class OllamaClient {
             runningModels.first {
                 item in
 
-                item.name ==
-                    modelName
+                item.name
+                ==
+                modelName
                 ||
-                item.model ==
-                    modelName
+                item.model
+                ==
+                modelName
             }
 
         return OllamaModelDiagnostics(
@@ -561,16 +762,20 @@ final class OllamaClient {
 
     private func nativeContextLength(
         for modelName: String
-    ) async throws -> Int? {
+    ) async throws
+        -> Int? {
 
-        let url = try makeURL(
-            path: "/api/show"
-        )
+        let url =
+            try makeURL(
+                path: "/api/show"
+            )
 
         let body =
             OllamaShowRequest(
-                model: modelName,
-                verbose: false
+                model:
+                    modelName,
+                verbose:
+                    false
             )
 
         var request =
@@ -590,13 +795,20 @@ final class OllamaClient {
 
         request.httpBody =
             try JSONEncoder()
-                .encode(body)
+                .encode(
+                    body
+                )
 
-        let (data, response) =
+        let (
+            data,
+            response
+        ) =
             try await
-            URLSession.shared.data(
-                for: request
-            )
+            URLSession.shared
+                .data(
+                    for:
+                        request
+                )
 
         guard
             let httpResponse =
@@ -604,10 +816,11 @@ final class OllamaClient {
                 as? HTTPURLResponse
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode: -1
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode: -1
+                    )
         }
 
         guard
@@ -618,12 +831,13 @@ final class OllamaClient {
                 )
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode:
-                        httpResponse
-                            .statusCode
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode:
+                            httpResponse
+                                .statusCode
+                    )
         }
 
         guard
@@ -635,16 +849,21 @@ final class OllamaClient {
                 as? [String: Any],
 
             let modelInfo =
-                root["model_info"]
+                root[
+                    "model_info"
+                ]
                 as? [String: Any]
 
         else {
+
             return nil
         }
 
-        return extractNativeContextLength(
-            from: modelInfo
-        )
+        return
+            extractNativeContextLength(
+                from:
+                    modelInfo
+            )
     }
 
     private func
@@ -653,8 +872,6 @@ final class OllamaClient {
             [String: Any]
     ) -> Int? {
 
-        // 优先通过 architecture
-        // 精确定位主模型 context。
         if
             let architecture =
                 modelInfo[
@@ -668,16 +885,15 @@ final class OllamaClient {
             if
                 let value =
                     integerValue(
-                        modelInfo[key]
+                        modelInfo[
+                            key
+                        ]
                     ) {
 
                 return value
             }
         }
 
-        // 不同模型的 architecture
-        // 命名并不完全一致，
-        // 所以再做通用 fallback。
         let candidates =
             modelInfo
                 .compactMap {
@@ -691,11 +907,10 @@ final class OllamaClient {
                             ".context_length"
                         )
                     else {
+
                         return nil
                     }
 
-                    // 排除视觉、音频等
-                    // 子模型 context。
                     if
                         key.contains(
                             ".vision."
@@ -714,6 +929,7 @@ final class OllamaClient {
                                 value
                             )
                     else {
+
                         return nil
                     }
 
@@ -725,8 +941,9 @@ final class OllamaClient {
 
         return candidates
             .sorted {
-                $0.0.count <
-                    $1.0.count
+                $0.0.count
+                <
+                $1.0.count
             }
             .first?
             .1
@@ -738,16 +955,23 @@ final class OllamaClient {
 
         if
             let number =
-                value as? NSNumber {
+                value
+                as? NSNumber {
 
-            return number.intValue
+            return
+                number
+                    .intValue
         }
 
         if
             let string =
-                value as? String {
+                value
+                as? String {
 
-            return Int(string)
+            return
+                Int(
+                    string
+                )
         }
 
         return nil
@@ -759,9 +983,10 @@ final class OllamaClient {
         async throws
         -> [OllamaRunningModel] {
 
-        let url = try makeURL(
-            path: "/api/ps"
-        )
+        let url =
+            try makeURL(
+                path: "/api/ps"
+            )
 
         let request =
             URLRequest(
@@ -769,11 +994,16 @@ final class OllamaClient {
                 timeoutInterval: 10
             )
 
-        let (data, response) =
+        let (
+            data,
+            response
+        ) =
             try await
-            URLSession.shared.data(
-                for: request
-            )
+            URLSession.shared
+                .data(
+                    for:
+                        request
+                )
 
         guard
             let httpResponse =
@@ -781,10 +1011,11 @@ final class OllamaClient {
                 as? HTTPURLResponse
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode: -1
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode: -1
+                    )
         }
 
         guard
@@ -795,12 +1026,13 @@ final class OllamaClient {
                 )
         else {
 
-            throw OllamaClientError
-                .invalidResponse(
-                    statusCode:
-                        httpResponse
-                            .statusCode
-                )
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode:
+                            httpResponse
+                                .statusCode
+                    )
         }
 
         let result =
@@ -810,7 +1042,8 @@ final class OllamaClient {
                     from: data
                 )
 
-        return result.models
+        return
+            result.models
     }
 
     // MARK: - Language Detection
@@ -820,10 +1053,11 @@ final class OllamaClient {
     ) -> TranslationDirection {
 
         let cleanedText =
-            text.trimmingCharacters(
-                in:
-                    .whitespacesAndNewlines
-            )
+            text
+                .trimmingCharacters(
+                    in:
+                        .whitespacesAndNewlines
+                )
 
         let recognizer =
             NLLanguageRecognizer()
@@ -852,6 +1086,7 @@ final class OllamaClient {
                     .englishToChinese
 
             default:
+
                 break
             }
         }
@@ -875,46 +1110,54 @@ final class OllamaClient {
     ) -> Bool {
 
         let chineseCount =
-            text.unicodeScalars
-                .filter { scalar in
+            text
+                .unicodeScalars
+                .filter {
+                    scalar in
 
                     let value =
                         scalar.value
 
                     return
                         (
-                            value >=
-                                0x4E00
+                            value
+                            >=
+                            0x4E00
                             &&
-                            value <=
-                                0x9FFF
+                            value
+                            <=
+                            0x9FFF
                         )
                         ||
                         (
-                            value >=
-                                0x3400
+                            value
+                            >=
+                            0x3400
                             &&
-                            value <=
-                                0x4DBF
+                            value
+                            <=
+                            0x4DBF
                         )
                 }
                 .count
 
         let meaningfulCount =
-            text.filter {
-                character in
+            text
+                .filter {
+                    character in
 
-                !character
-                    .isWhitespace
-                &&
-                !character
-                    .isPunctuation
-            }
-            .count
+                    !character
+                        .isWhitespace
+                    &&
+                    !character
+                        .isPunctuation
+                }
+                .count
 
         guard
             meaningfulCount > 0
         else {
+
             return false
         }
 
@@ -927,7 +1170,8 @@ final class OllamaClient {
                 meaningfulCount
             )
 
-        return ratio >= 0.15
+        return
+            ratio >= 0.15
     }
 
     // MARK: - URL
