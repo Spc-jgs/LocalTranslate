@@ -11,7 +11,7 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
     // MARK: - Published States
 
     @Published public var isRunning = false
-    @Published public var sourceLanguage: SubtitleSourceLanguage = .japanese
+    @Published public var sourceLanguage: SubtitleSourceLanguage = .english
     @Published public var audioLevel: Float = 0.0
     @Published public var currentOriginalText: String = ""
     @Published public var currentTranslatedText: String = ""
@@ -86,8 +86,12 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
     }
 
     public func setSourceLanguage(_ language: SubtitleSourceLanguage) {
+        guard language != sourceLanguage else { return }
         self.sourceLanguage = language
-        speechRecognizer?.setLanguage(language)
+        self.currentOriginalText = ""
+        self.currentTranslatedText = ""
+        self.translationService.cancel()
+        self.speechRecognizer?.setLanguage(language)
     }
 
     public func clearSubtitles() {
@@ -108,7 +112,6 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
     public nonisolated func systemAudioCaptureAudioLevelDidChange(level: Float) {
         Task { @MainActor in
             guard self.isRunning else { return }
-            // 平滑动画过渡
             self.audioLevel = self.audioLevel * 0.7 + level * 0.3
         }
     }
