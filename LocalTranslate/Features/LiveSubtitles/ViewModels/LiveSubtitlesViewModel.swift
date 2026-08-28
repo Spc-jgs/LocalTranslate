@@ -16,6 +16,7 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
     @Published public var audioLevel: Float = 0.0
     @Published public var currentOriginalText: String = ""
     @Published public var currentTranslatedText: String = ""
+    @Published public var previousItem: SubtitleItem?
     @Published public var subtitleHistory: [SubtitleItem] = []
     @Published public var showHistoryDrawer = false
     @Published public var errorMessage: String?
@@ -107,6 +108,7 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
 
         self.currentOriginalText = ""
         self.currentTranslatedText = ""
+        self.previousItem = nil
         self.translationService.cancel()
         self.speechRecognizer?.setLanguage(language)
     }
@@ -132,6 +134,7 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
         withAnimation(.easeOut(duration: 0.2)) {
             currentOriginalText = ""
             currentTranslatedText = ""
+            previousItem = nil
             subtitleHistory.removeAll()
         }
     }
@@ -167,9 +170,9 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
 
             self.currentOriginalText = text
 
-            // 停顿断句判定：4.0 秒无声则完成本句提交
+            // 停顿断句判定：3.5 秒静音则完成本句提交至上一句/历史
             self.silenceTimer?.invalidate()
-            self.silenceTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
+            self.silenceTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
                 Task { @MainActor in
                     self?.commitCurrentSubtitle()
                 }
@@ -217,10 +220,11 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
             subtitleHistory.removeFirst(subtitleHistory.count - 50)
         }
 
-        // 平滑渐隐当前屏幕字幕
-        withAnimation(.easeOut(duration: 0.3)) {
-            currentOriginalText = ""
-            currentTranslatedText = ""
+        // 平滑滚动：将当前句推为上一句，清空当前输入等待下一句
+        withAnimation(.easeInOut(duration: 0.25)) {
+            self.previousItem = item
+            self.currentOriginalText = ""
+            self.currentTranslatedText = ""
         }
     }
 }

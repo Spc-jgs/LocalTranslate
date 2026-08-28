@@ -10,10 +10,10 @@ public struct LiveSubtitlesView: View {
 
     public var body: some View {
         ZStack {
-            // 电影级高透磨砂深色胶囊底色
+            // Apple 原生磨砂质感背景
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(
-                    Color.black.opacity(isHovering ? 0.84 : 0.68)
+                    Color.black.opacity(isHovering ? 0.82 : 0.65)
                 )
                 .background(
                     .ultraThinMaterial,
@@ -21,20 +21,20 @@ public struct LiveSubtitlesView: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
 
             VStack(spacing: 0) {
-                // 顶部精致悬浮工具条 (仅悬停或暂停时显现，平时隐形以保持纯净观影)
+                // 顶部 Apple 原生悬浮工具条
                 if isHovering || !viewModel.isRunning {
                     topControlBar
                         .transition(.opacity.combined(with: .move(edge: .top)))
-                        .padding(.bottom, 6)
+                        .padding(.bottom, 8)
                 }
 
-                // 核心字幕展示区 (主译文 + 外文原文对照)
+                // 核心字幕展示区 (支持 上一句 + 当前句 滚动流式排版)
                 if !viewModel.showHistoryDrawer {
-                    subtitleDisplayArea
+                    rollingSubtitleDisplayArea
                         .transition(.opacity)
                 } else {
                     // 台词历史回溯抽屉
@@ -45,11 +45,11 @@ public struct LiveSubtitlesView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
             .animation(.easeInOut(duration: 0.22), value: isHovering)
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: viewModel.showHistoryDrawer)
+            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: viewModel.showHistoryDrawer)
         }
         .frame(
-            width: 700,
-            height: viewModel.showHistoryDrawer ? 240 : (isHovering || !viewModel.isRunning ? 145 : 115)
+            width: 710,
+            height: viewModel.showHistoryDrawer ? 240 : (isHovering || !viewModel.isRunning ? 150 : 120)
         )
         .onHover { hovering in
             isHovering = hovering
@@ -59,10 +59,10 @@ public struct LiveSubtitlesView: View {
         }
     }
 
-    // MARK: - Top Control Bar
+    // MARK: - Top Control Bar (Apple 原生控件)
 
     private var topControlBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             // 状态指示灯与动态音浪
             HStack(spacing: 5) {
                 Circle()
@@ -77,8 +77,11 @@ public struct LiveSubtitlesView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(viewModel.isRunning ? .green : .secondary)
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.white.opacity(0.06), in: Capsule())
 
-            // 源语言切换器
+            // 源语言选择器 (macOS 原生菜单)
             Picker("", selection: Binding(
                 get: { viewModel.sourceLanguage },
                 set: { viewModel.setSourceLanguage($0) }
@@ -91,7 +94,7 @@ public struct LiveSubtitlesView: View {
             .frame(width: 125)
             .controlSize(.small)
 
-            // 双语 / 仅中文 / 仅外文 模式切换
+            // 双语 / 仅译文 / 仅原文 模式选择 (macOS 原生分段器)
             Picker("", selection: Binding(
                 get: { viewModel.displayMode },
                 set: { viewModel.setDisplayMode($0) }
@@ -107,114 +110,138 @@ public struct LiveSubtitlesView: View {
             Spacer()
 
             // 字号微调
-            HStack(spacing: 3) {
-                Button(action: { viewModel.adjustFontSize(delta: -2) }) {
-                    Image(systemName: "textformat.size.smaller")
-                        .font(.system(size: 11))
+            HStack(spacing: 2) {
+                NativeIconButton(systemName: "textformat.size.smaller", helpText: "减小字号") {
+                    viewModel.adjustFontSize(delta: -2)
                 }
-                .buttonStyle(.plain)
 
                 Text("\(Int(viewModel.fontSize))")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.8))
                     .frame(width: 18)
 
-                Button(action: { viewModel.adjustFontSize(delta: 2) }) {
-                    Image(systemName: "textformat.size.larger")
-                        .font(.system(size: 11))
+                NativeIconButton(systemName: "textformat.size.larger", helpText: "增大字号") {
+                    viewModel.adjustFontSize(delta: 2)
                 }
-                .buttonStyle(.plain)
             }
-            .foregroundColor(.white.opacity(0.7))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
 
-            // 历史台词抽屉
-            Button(action: { viewModel.toggleHistoryDrawer() }) {
-                Image(systemName: viewModel.showHistoryDrawer ? "clock.fill" : "clock")
-                    .font(.system(size: 11))
-                    .foregroundColor(viewModel.showHistoryDrawer ? .accentColor : .white.opacity(0.65))
+            // 历史台词回溯抽屉
+            NativeIconButton(
+                systemName: viewModel.showHistoryDrawer ? "clock.fill" : "clock",
+                tintColor: viewModel.showHistoryDrawer ? .accentColor : .white.opacity(0.75),
+                helpText: viewModel.showHistoryDrawer ? "关闭台词历史" : "回溯最近台词历史"
+            ) {
+                viewModel.toggleHistoryDrawer()
             }
-            .buttonStyle(.plain)
-            .help(viewModel.showHistoryDrawer ? "关闭台词历史" : "回溯最近台词历史")
 
             // 开始/暂停
-            Button(action: { viewModel.toggleRunning() }) {
-                Image(systemName: viewModel.isRunning ? "pause.fill" : "play.fill")
-                    .font(.system(size: 11))
-                    .foregroundColor(.white)
+            NativeIconButton(
+                systemName: viewModel.isRunning ? "pause.fill" : "play.fill",
+                helpText: viewModel.isRunning ? "暂停同传" : "开启同传"
+            ) {
+                viewModel.toggleRunning()
             }
-            .buttonStyle(.plain)
-            .help(viewModel.isRunning ? "暂停同传" : "开启同传")
 
             // 清屏
-            Button(action: { viewModel.clearSubtitles() }) {
-                Image(systemName: "trash")
-                    .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.6))
+            NativeIconButton(
+                systemName: "trash",
+                helpText: "清空当前字幕"
+            ) {
+                viewModel.clearSubtitles()
             }
-            .buttonStyle(.plain)
-            .help("清空当前字幕")
 
             // 关闭
-            Button(action: {
+            NativeIconButton(
+                systemName: "xmark",
+                helpText: "关闭实时字幕条"
+            ) {
                 viewModel.stop()
                 LiveSubtitlesOverlayPanel.shared.orderOut(nil)
-            }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white.opacity(0.6))
             }
-            .buttonStyle(.plain)
-            .help("关闭实时字幕条")
         }
         .padding(.horizontal, 2)
     }
 
-    // MARK: - Subtitle Display Area
+    // MARK: - Rolling Subtitle Display Area (滚动双行字幕流)
 
-    private var subtitleDisplayArea: some View {
-        VStack(spacing: 5) {
-            // 1. 中文主译文 (电影级大字号、抗眩光白色 + 柔和黑影)
-            if shouldShowTranslation {
-                if !viewModel.currentTranslatedText.isEmpty {
-                    Text(viewModel.currentTranslatedText)
-                        .font(.system(size: viewModel.fontSize, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .shadow(color: .black.opacity(0.95), radius: 3, x: 0, y: 1.5)
-                        .shadow(color: .black.opacity(0.6), radius: 6, x: 0, y: 2)
-                } else if viewModel.isRunning && viewModel.currentOriginalText.isEmpty {
-                    VStack(spacing: 3) {
-                        Text("正在聆听电影/视频声音...")
+    private var rollingSubtitleDisplayArea: some View {
+        VStack(spacing: 4) {
+            // 1. 上一句 (半透明灰白，给读者留出阅读缓冲，平滑衔接歌词与台词)
+            if let prev = viewModel.previousItem, hasActiveContent {
+                VStack(spacing: 2) {
+                    if shouldShowTranslation && !prev.translatedText.isEmpty {
+                        Text(prev.translatedText)
                             .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
-                            .foregroundColor(.white.opacity(0.65))
-
-                        if viewModel.audioLevel < 0.02 {
-                            Text("（💡 需开启电脑声音或佩戴耳机播放，完全静音时无法提取声波）")
-                                .font(.system(size: 10.5))
-                                .foregroundColor(.white.opacity(0.38))
-                        }
+                            .foregroundColor(.white.opacity(0.55))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(1)
+                            .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                     }
-                    .multilineTextAlignment(.center)
-                } else if !viewModel.isRunning && viewModel.currentOriginalText.isEmpty {
-                    Text("点击顶部 ▶ 开启实时字幕同传")
-                        .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
-                        .foregroundColor(.white.opacity(0.35))
-                        .multilineTextAlignment(.center)
+                    if shouldShowOriginal && !prev.originalText.isEmpty && prev.originalText != prev.translatedText {
+                        Text(prev.originalText)
+                            .font(.system(size: max(viewModel.fontSize * 0.58, 11), weight: .regular))
+                            .foregroundColor(.white.opacity(0.4))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(1)
+                    }
                 }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            // 2. 外文原文 (优雅半透明灰白)
-            if shouldShowOriginal && !viewModel.currentOriginalText.isEmpty {
-                Text(viewModel.currentOriginalText)
-                    .font(.system(size: max(viewModel.fontSize * 0.68, 12), weight: .regular))
-                    .foregroundColor(.white.opacity(0.72))
+            // 2. 当前句 (纯白高亮加粗，抗眩光双层阴影)
+            if hasActiveContent {
+                VStack(spacing: 3) {
+                    // 主译文
+                    if shouldShowTranslation {
+                        let textToShow = !viewModel.currentTranslatedText.isEmpty
+                            ? viewModel.currentTranslatedText
+                            : viewModel.currentOriginalText
+
+                        Text(textToShow)
+                            .font(.system(size: viewModel.fontSize, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .shadow(color: .black.opacity(0.95), radius: 3, x: 0, y: 1.5)
+                            .shadow(color: .black.opacity(0.6), radius: 6, x: 0, y: 2)
+                    }
+
+                    // 原文字幕
+                    if shouldShowOriginal && !viewModel.currentOriginalText.isEmpty {
+                        Text(viewModel.currentOriginalText)
+                            .font(.system(size: max(viewModel.fontSize * 0.66, 12), weight: .regular))
+                            .foregroundColor(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(1)
+                            .shadow(color: .black.opacity(0.85), radius: 2, x: 0, y: 1)
+                    }
+                }
+                .transition(.opacity)
+            } else if viewModel.isRunning {
+                // 等待声音输入状态
+                VStack(spacing: 3) {
+                    Text("正在聆听电影/视频声音...")
+                        .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
+                        .foregroundColor(.white.opacity(0.65))
+
+                    if viewModel.audioLevel < 0.02 {
+                        Text("（💡 需开启电脑声音或佩戴耳机播放，完全静音时无法提取声波）")
+                            .font(.system(size: 10.5))
+                            .foregroundColor(.white.opacity(0.38))
+                    }
+                }
+                .multilineTextAlignment(.center)
+            } else {
+                Text("点击顶部 ▶ 开启实时字幕同传")
+                    .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
+                    .foregroundColor(.white.opacity(0.35))
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .shadow(color: .black.opacity(0.85), radius: 2, x: 0, y: 1)
             }
 
-            // 3. 错误提示
+            // 错误提示
             if let error = viewModel.errorMessage {
                 Text(error)
                     .font(.system(size: 11, weight: .medium))
@@ -223,6 +250,8 @@ public struct LiveSubtitlesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.currentTranslatedText)
+        .animation(.easeInOut(duration: 0.25), value: viewModel.previousItem)
     }
 
     // MARK: - Subtitle History Drawer (台词历史回溯抽屉)
@@ -311,11 +340,42 @@ public struct LiveSubtitlesView: View {
 
     // MARK: - Helpers
 
+    private var hasActiveContent: Bool {
+        !viewModel.currentTranslatedText.isEmpty || !viewModel.currentOriginalText.isEmpty
+    }
+
     private var shouldShowTranslation: Bool {
         viewModel.displayMode == .bilingual || viewModel.displayMode == .chineseOnly
     }
 
     private var shouldShowOriginal: Bool {
         viewModel.displayMode == .bilingual || viewModel.displayMode == .originalOnly
+    }
+}
+
+// MARK: - Native Icon Button
+
+private struct NativeIconButton: View {
+    let systemName: String
+    var tintColor: Color = .white.opacity(0.75)
+    var helpText: String = ""
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(tintColor)
+                .frame(width: 22, height: 22)
+                .background(
+                    isHovered ? Color.white.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .onHover { isHovered = $0 }
     }
 }
