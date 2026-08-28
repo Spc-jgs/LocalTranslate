@@ -20,6 +20,11 @@ public final class LiveSpeechRecognizer {
     private var isRunning = false
     private let processingQueue = DispatchQueue(label: "com.shaopc.LocalTranslate.speechRecognizerQueue", qos: .userInitiated)
 
+    // 音频重采样管线：将 48kHz 立体声转换为 SFSpeechRecognizer 最佳声学标准 16kHz 单声道
+    private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)
+    private var audioConverter: AVAudioConverter?
+    private var cachedInputFormat: AVAudioFormat?
+
     public init(language: SubtitleSourceLanguage = .english) {
         self.currentLanguage = language
         setupRecognizer(for: language)
@@ -63,7 +68,53 @@ public final class LiveSpeechRecognizer {
 
     public func appendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
         guard isRunning, let request = self.recognitionRequest else { return }
-        request.append(buffer)
+
+        // 重采样为 16kHz 单声道以极大增强歌曲/背景音乐环境下的人声分离识别率
+        let processedBuffer = resampleAudioBuffer(buffer)
+        request.append(processedBuffer)
+    }
+
+    // MARK: - Audio Resampling
+
+    private func resampleAudioBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+        guard let targetFormat = self.targetFormat else { return buffer }
+
+        if buffer.format == targetFormat {
+            return buffer
+        }
+
+        if audioConverter == nil || cachedInputFormat != buffer.format {
+            cachedInputFormat = buffer.format
+            audioConverter = AVAudioConverter(from: buffer.format, to: targetFormat)
+        }
+
+        guard let converter = audioConverter else { return buffer }
+
+        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
+        let targetCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: targetCapacity) else {
+            return buffer
+        }
+
+        var isConsumed = false
+        var error: NSError?
+
+        let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+            if !isConsumed {
+                outStatus.pointee = .haveData
+                isConsumed = true
+                return buffer
+            } else {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+        }
+
+        if status == .haveData || status == .inputRanDry {
+            return outputBuffer
+        }
+
+        return buffer
     }
 
     // MARK: - Private Session Setup
@@ -90,9 +141,11 @@ public final class LiveSpeechRecognizer {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        request.taskHint = .dictation
 
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
+        if #available(macOS 13, *) {
+            // 在歌曲和快语速场景下关闭强制标点预测，避免标点回退导致丢词卡顿
+            request.addsPunctuation = false
         }
 
         self.recognitionRequest = request
