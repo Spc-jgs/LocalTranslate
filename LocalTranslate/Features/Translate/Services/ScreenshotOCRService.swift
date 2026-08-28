@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Vision
+import CoreGraphics
 
 @MainActor
 final class ScreenshotOCRService {
@@ -10,8 +11,41 @@ final class ScreenshotOCRService {
 
     private init() {}
 
+    /// 检查并请求屏幕录制权限
+    func checkPermission(promptIfNeeded: Bool = true) -> Bool {
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+
+        guard promptIfNeeded else {
+            return false
+        }
+
+        CGRequestScreenCaptureAccess()
+
+        let alert = NSAlert()
+        alert.messageText = "需要“屏幕录制”权限"
+        alert.informativeText = "LocalTranslate 需要屏幕录制权限才能识别截图中的文字并翻译。\n\n请在“系统设置 -> 隐私与安全性 -> 屏幕与系统音频录制”中允许 LocalTranslate，然后重新尝试截图。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "取消")
+
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+
+        return false
+    }
+
     /// 调起系统原生交互框选，并对截屏进行精准 Vision OCR 识别与段落重组
     func captureAndRecognizeText() async throws -> String? {
+        guard checkPermission(promptIfNeeded: true) else {
+            return nil
+        }
+
         guard !isCapturing else {
             return nil
         }
