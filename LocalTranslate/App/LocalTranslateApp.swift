@@ -39,17 +39,25 @@ private struct MenuBarContent: View {
 
     var body: some View {
 
-        Button(
-            "显示翻译窗口"
-        ) {
+        Button("划词翻译 (⌥⇧T)") {
+            NotificationCenter.default.post(
+                name: .triggerTranslateSelection,
+                object: nil
+            )
+        }
 
-            NotificationCenter
-                .default
-                .post(
-                    name:
-                        .showTranslatePanel,
-                    object: nil
-                )
+        Button("截图翻译 (⌥⇧S)") {
+            NotificationCenter.default.post(
+                name: .triggerScreenshotOCR,
+                object: nil
+            )
+        }
+
+        Button("输入翻译窗口") {
+            NotificationCenter.default.post(
+                name: .showTranslatePanel,
+                object: nil
+            )
         }
 
         Divider()
@@ -168,12 +176,14 @@ final class AppDelegate:
         let hotKeyManager =
             HotKeyManager()
 
-        hotKeyManager.register {
-            [weak self] in
-
-            self?
-                .handleTranslateHotKey()
-        }
+        hotKeyManager.register(
+            onTranslate: { [weak self] in
+                self?.handleTranslateHotKey()
+            },
+            onScreenshot: { [weak self] in
+                self?.handleScreenshotHotKey()
+            }
+        )
 
         self.hotKeyManager =
             hotKeyManager
@@ -187,6 +197,30 @@ final class AppDelegate:
                     ),
                 name:
                     .showTranslatePanel,
+                object: nil
+            )
+
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector:
+                    #selector(
+                        handleTranslateSelectionNotification
+                    ),
+                name:
+                    .triggerTranslateSelection,
+                object: nil
+            )
+
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector:
+                    #selector(
+                        handleScreenshotOCRNotification
+                    ),
+                name:
+                    .triggerScreenshotOCR,
                 object: nil
             )
     }
@@ -281,6 +315,44 @@ final class AppDelegate:
                 .viewModel
                 .requestInputFocus()
         }
+    }
+
+    // MARK: - Screenshot OCR HotKey
+
+    private func handleScreenshotHotKey() {
+        if let panel, panel.isVisible, !viewModel.isPinned {
+            panel.orderOut(nil)
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            do {
+                guard let recognizedText = try await ScreenshotOCRService.shared.captureAndRecognizeText(),
+                      !recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return
+                }
+
+                self.viewModel.loadSelectedText(recognizedText)
+                self.showPanel(
+                    reposition: !self.viewModel.isPinned,
+                    activateApp: false
+                )
+                self.viewModel.translate()
+            } catch {
+                // 静默忽略用户取消
+            }
+        }
+    }
+
+    @objc
+    private func handleTranslateSelectionNotification(_ notification: Notification) {
+        handleTranslateHotKey()
+    }
+
+    @objc
+    private func handleScreenshotOCRNotification(_ notification: Notification) {
+        handleScreenshotHotKey()
     }
 
     // MARK: - Normal Panel Show
@@ -995,5 +1067,15 @@ extension Notification.Name {
     static let showTranslatePanel =
         Notification.Name(
             "showTranslatePanel"
+        )
+
+    static let triggerTranslateSelection =
+        Notification.Name(
+            "triggerTranslateSelection"
+        )
+
+    static let triggerScreenshotOCR =
+        Notification.Name(
+            "triggerScreenshotOCR"
         )
 }

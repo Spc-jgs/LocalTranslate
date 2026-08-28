@@ -3,13 +3,19 @@ import Carbon.HIToolbox
 
 final class HotKeyManager {
 
-    private var hotKeyRef: EventHotKeyRef?
+    private var translateHotKeyRef: EventHotKeyRef?
+    private var screenshotHotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
 
-    private var action: (() -> Void)?
+    private var translateAction: (() -> Void)?
+    private var screenshotAction: (() -> Void)?
 
-    func register(action: @escaping () -> Void) {
-        self.action = action
+    func register(
+        onTranslate: @escaping () -> Void,
+        onScreenshot: @escaping () -> Void
+    ) {
+        self.translateAction = onTranslate
+        self.screenshotAction = onScreenshot
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -20,9 +26,8 @@ final class HotKeyManager {
 
         InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, _, userData in
-
-                guard let userData else {
+            { _, inEvent, userData in
+                guard let userData, let inEvent else {
                     return noErr
                 }
 
@@ -30,8 +35,23 @@ final class HotKeyManager {
                     .fromOpaque(userData)
                     .takeUnretainedValue()
 
+                var hotKeyID = EventHotKeyID()
+                GetEventParameter(
+                    inEvent,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+
                 DispatchQueue.main.async {
-                    manager.action?()
+                    if hotKeyID.id == 1 {
+                        manager.translateAction?()
+                    } else if hotKeyID.id == 2 {
+                        manager.screenshotAction?()
+                    }
                 }
 
                 return noErr
@@ -42,26 +62,42 @@ final class HotKeyManager {
             &eventHandlerRef
         )
 
-        let hotKeyID = EventHotKeyID(
+        // 1. 划词/剪贴板翻译: ⌥⇧T
+        let translateID = EventHotKeyID(
             signature: OSType(0x4C54524E), // LTRN
             id: 1
         )
-
         RegisterEventHotKey(
             UInt32(kVK_ANSI_T),
             UInt32(optionKey | shiftKey),
-            hotKeyID,
+            translateID,
             GetApplicationEventTarget(),
             0,
-            &hotKeyRef
+            &translateHotKeyRef
+        )
+
+        // 2. 截图翻译: ⌥⇧S
+        let screenshotID = EventHotKeyID(
+            signature: OSType(0x4C54524E), // LTRN
+            id: 2
+        )
+        RegisterEventHotKey(
+            UInt32(kVK_ANSI_S),
+            UInt32(optionKey | shiftKey),
+            screenshotID,
+            GetApplicationEventTarget(),
+            0,
+            &screenshotHotKeyRef
         )
     }
 
     deinit {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
+        if let translateHotKeyRef {
+            UnregisterEventHotKey(translateHotKeyRef)
         }
-
+        if let screenshotHotKeyRef {
+            UnregisterEventHotKey(screenshotHotKeyRef)
+        }
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
         }
