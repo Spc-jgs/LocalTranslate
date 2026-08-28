@@ -20,7 +20,7 @@ struct LocalTranslateApp: App {
 
             Image(
                 systemName:
-                    "character.book.closed"
+                    "translate"
             )
         }
 

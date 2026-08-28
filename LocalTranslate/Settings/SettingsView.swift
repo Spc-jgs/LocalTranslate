@@ -153,7 +153,7 @@ struct SettingsView: View {
                 )
 
                 Image(
-                    systemName: "character.book.closed"
+                    systemName: "translate"
                 )
                 .font(
                     .system(

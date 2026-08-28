@@ -124,7 +124,7 @@ struct ContentView: View {
                 )
                 .fill(Color.primary.opacity(0.06))
 
-                Image(systemName: "character.book.closed")
+                Image(systemName: "translate")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
             }

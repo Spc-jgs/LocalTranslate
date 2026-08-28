@@ -10,10 +10,10 @@ struct CodexProvider: UsageProvider {
     func fetch() async throws -> AccountSnapshot {
         try await Task.detached(priority: .utility) {
             let runner = CodexAppServerRunner(codexHome: codexHome)
-            let responses = try runner.fetchAccountData()
+            let responses = runner.fetchAccountDataGracefully()
             let realModels = self.extractRealModels(from: codexHome)
 
-            return try Self.makeSnapshot(
+            return Self.makeSnapshot(
                 providerID: providerID,
                 displayName: displayName,
                 sortOrder: sortOrder,
@@ -29,7 +29,7 @@ struct CodexProvider: UsageProvider {
         sortOrder: Int,
         responses: CodexResponses,
         realModels: [String: Int]
-    ) throws -> AccountSnapshot {
+    ) -> AccountSnapshot {
         let accountResult = responses.account["result"] as? [String: Any]
         let account = accountResult?["account"] as? [String: Any]
         let email = account?["email"] as? String
@@ -133,8 +133,8 @@ struct CodexProvider: UsageProvider {
             modelActivity: modelActivity,
             updatedAt: Date(),
             sourceLabel: "codex app-server",
-            confidence: .high,
-            statusMessage: nil
+            confidence: responses.hasError ? .medium : .high,
+            statusMessage: responses.statusMessage
         )
     }
 
@@ -317,6 +317,8 @@ private struct CodexResponses {
     let account: [String: Any]
     let rateLimits: [String: Any]
     let usage: [String: Any]
+    let hasError: Bool
+    let statusMessage: String?
 }
 
 private final class CodexAppServerRunner {
@@ -326,8 +328,16 @@ private final class CodexAppServerRunner {
         self.codexHome = codexHome
     }
 
-    func fetchAccountData() throws -> CodexResponses {
-        let codexURL = try ShellResolver.resolve("codex")
+    func fetchAccountDataGracefully() -> CodexResponses {
+        guard let codexURL = try? ShellResolver.resolve("codex") else {
+            return CodexResponses(
+                account: [:],
+                rateLimits: [:],
+                usage: [:],
+                hasError: true,
+                statusMessage: "未安装 Codex CLI"
+            )
+        }
 
         let process = Process()
         process.executableURL = codexURL
@@ -352,7 +362,13 @@ private final class CodexAppServerRunner {
             try process.run()
         } catch {
             reader.stop()
-            throw UsageHubError.processFailed(error.localizedDescription)
+            return CodexResponses(
+                account: [:],
+                rateLimits: [:],
+                usage: [:],
+                hasError: true,
+                statusMessage: error.localizedDescription
+            )
         }
 
         defer {
@@ -362,7 +378,7 @@ private final class CodexAppServerRunner {
             }
         }
 
-        try send([
+        _ = try? send([
             "method": "initialize",
             "id": 1,
             "params": [
@@ -374,39 +390,38 @@ private final class CodexAppServerRunner {
             ]
         ], to: stdin.fileHandleForWriting)
 
-        _ = try waitForResponse(id: 1, reader: reader, timeout: 8)
+        _ = try? waitForResponse(id: 1, reader: reader, timeout: 5)
 
-        try send([
+        _ = try? send([
             "method": "initialized",
             "params": [:]
         ], to: stdin.fileHandleForWriting)
 
-        try send([
+        _ = try? send([
             "method": "account/read",
             "id": 2,
             "params": ["refreshToken": false]
         ], to: stdin.fileHandleForWriting)
 
-        try send([
+        _ = try? send([
             "method": "account/rateLimits/read",
             "id": 3,
             "params": [:]
         ], to: stdin.fileHandleForWriting)
 
-        try send([
+        _ = try? send([
             "method": "account/usage/read",
             "id": 4,
             "params": [:]
         ], to: stdin.fileHandleForWriting)
 
         var responses: [Int: [String: Any]] = [:]
-        let deadline = Date().addingTimeInterval(12)
+        let deadline = Date().addingTimeInterval(8)
+        var capturedErrorMessage: String? = nil
 
         while responses.count < 3 {
             let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else {
-                break
-            }
+            guard remaining > 0 else { break }
 
             guard let line = reader.nextLine(timeout: remaining) else {
                 break
@@ -419,8 +434,11 @@ private final class CodexAppServerRunner {
             }
 
             if let error = object["error"] as? [String: Any] {
-                let message = error["message"] as? String ?? "Unknown JSON-RPC error"
-                throw UsageHubError.processFailed(message)
+                // Method-level soft error (e.g. usage query timeout from upstream)
+                let message = error["message"] as? String ?? "Upstream timeout"
+                capturedErrorMessage = message
+                responses[id] = ["result": [:]]
+                continue
             }
 
             responses[id] = object
@@ -430,14 +448,20 @@ private final class CodexAppServerRunner {
         let rateLimits = responses[3] ?? ["result": [:]]
         let usage = responses[4] ?? ["result": [:]]
 
-        return CodexResponses(account: account, rateLimits: rateLimits, usage: usage)
+        return CodexResponses(
+            account: account,
+            rateLimits: rateLimits,
+            usage: usage,
+            hasError: capturedErrorMessage != nil,
+            statusMessage: capturedErrorMessage
+        )
     }
 
     private func waitForResponse(
         id: Int,
         reader: LineReader,
         timeout: TimeInterval
-    ) throws -> [String: Any] {
+    ) throws -> [String: Any]? {
         let deadline = Date().addingTimeInterval(timeout)
 
         while deadline.timeIntervalSinceNow > 0 {
@@ -451,15 +475,10 @@ private final class CodexAppServerRunner {
                 continue
             }
 
-            if let error = object["error"] as? [String: Any] {
-                let message = error["message"] as? String ?? "Unknown JSON-RPC error"
-                throw UsageHubError.processFailed(message)
-            }
-
             return object
         }
 
-        throw UsageHubError.timeout("Codex initialize")
+        return nil
     }
 
     private func send(_ object: [String: Any], to handle: FileHandle) throws {
