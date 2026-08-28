@@ -16,7 +16,7 @@ struct CleanTextScrollView: NSViewRepresentable {
 
         let scrollView = NSScrollView()
 
-        // 保留滚动能力，但完全不显示滚动条。
+        // 保留滚动能力，完全不显示滚动条
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
@@ -39,6 +39,9 @@ struct CleanTextScrollView: NSViewRepresentable {
         textView.importsGraphics = false
 
         textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.textColor = .textColor
+        textView.insertionPointColor = .controlAccentColor
 
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
@@ -108,8 +111,7 @@ struct CleanTextScrollView: NSViewRepresentable {
         let shouldFollowBottom =
             context.coordinator.isNearBottom()
 
-        // Streaming 时只追加新增内容，
-        // 避免每个 token 全文重绘。
+        // Streaming 时只追加新增内容，避免每个 token 全文重绘
         if text.hasPrefix(oldText) {
 
             let suffix = String(
@@ -127,8 +129,7 @@ struct CleanTextScrollView: NSViewRepresentable {
 
         } else {
 
-            // 清空、重新翻译、切换内容时
-            // 才整体替换。
+            // 清空、重新翻译、切换内容时才整体替换
             setFullText(
                 text,
                 to: textView
@@ -160,11 +161,7 @@ struct CleanTextScrollView: NSViewRepresentable {
         }
 
         storage.beginEditing()
-
-        storage.setAttributedString(
-            attributed
-        )
-
+        storage.setAttributedString(attributed)
         storage.endEditing()
     }
 
@@ -187,11 +184,7 @@ struct CleanTextScrollView: NSViewRepresentable {
         }
 
         storage.beginEditing()
-
-        storage.append(
-            attributed
-        )
-
+        storage.append(attributed)
         storage.endEditing()
     }
 
@@ -201,12 +194,12 @@ struct CleanTextScrollView: NSViewRepresentable {
         let paragraphStyle =
             NSMutableParagraphStyle()
 
-        paragraphStyle.lineSpacing = 5
+        paragraphStyle.lineSpacing = 4
 
         return [
             .font:
                 NSFont.systemFont(
-                    ofSize: 15,
+                    ofSize: 14,
                     weight: .medium
                 ),
 
@@ -301,19 +294,15 @@ fileprivate final class CopyFriendlyTextView:
         let selection =
             selectedRange()
 
-        // 有选区：
-        // 按 NSTextView 默认行为只复制选中内容。
+        // 有选区：按 NSTextView 默认行为只复制选中内容
         if selection.length > 0 {
 
             super.copy(sender)
-
             onCopy?()
-
             return
         }
 
-        // 没有选区但触发了 Copy：
-        // 复制完整译文。
+        // 没有选区但触发了 Copy：复制完整译文
         guard !string.isEmpty else {
             return
         }

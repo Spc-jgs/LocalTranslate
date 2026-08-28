@@ -1,7 +1,20 @@
 import SwiftUI
 import Foundation
 
+private enum PersonalToolPage: String, CaseIterable, Identifiable {
+    case translation = "翻译"
+    case usage = "AI 用量"
+
+    var id: String { rawValue }
+}
+
 struct SettingsView: View {
+
+    @ObservedObject
+    private var usageStore = UsageStore.shared
+
+    @State
+    private var selectedPage: PersonalToolPage = .translation
 
     @AppStorage(AppSettings.Key.model)
     private var model = AppSettings.defaultModel
@@ -57,37 +70,22 @@ struct SettingsView: View {
             Divider()
                 .opacity(0.28)
 
-            ScrollView(.vertical) {
+            Group {
+                switch selectedPage {
 
-                VStack(
-                    alignment: .leading,
-                    spacing: 16
-                ) {
+                case .translation:
+                    translationSettingsContent
 
-                    connectionSection
-
-                    modelSection
-
-                    translationSection
-
-                    runtimeSection
-
-                    shortcutSection
-                }
-                .padding(
-                    EdgeInsets(
-                        top: 16,
-                        leading: 18,
-                        bottom: 18,
-                        trailing: 18
+                case .usage:
+                    AIUsageView(
+                        store: usageStore
                     )
-                )
+                }
             }
-            .scrollIndicators(.hidden)
         }
         .frame(
-            width: 530,
-            height: 650
+            width: 780,
+            height: 640
         )
         .task {
             await refresh()
@@ -100,6 +98,42 @@ struct SettingsView: View {
                 await refreshDiagnostics()
             }
         }
+        .onChange(
+            of: selectedPage
+        ) { _, newPage in
+
+            if newPage == .usage {
+                usageStore.start()
+            } else {
+                usageStore.stop()
+            }
+        }
+    }
+
+    // MARK: - Translation Content
+
+    private var translationSettingsContent: some View {
+
+        ScrollView(.vertical) {
+
+            VStack(
+                alignment: .leading,
+                spacing: 18
+            ) {
+
+                connectionSection
+
+                modelSection
+
+                translationSection
+
+                runtimeSection
+
+                shortcutSection
+            }
+            .padding(24)
+        }
+        .scrollIndicators(.visible)
     }
 
     // MARK: - Header
@@ -139,7 +173,7 @@ struct SettingsView: View {
                 spacing: 2
             ) {
 
-                Text("Local Translate")
+                Text("个人工具")
                     .font(
                         .system(
                             size: 15,
@@ -147,24 +181,43 @@ struct SettingsView: View {
                         )
                     )
 
-                Text("设置")
-                    .font(
-                        .system(size: 11)
-                    )
-                    .foregroundStyle(.secondary)
+                Text(
+                    selectedPage == .translation
+                    ? "翻译设置 · 本地 Ollama"
+                    : "AI 用量 · Codex + AGY + Grok 统计"
+                )
+                .font(
+                    .system(size: 11)
+                )
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
 
+            Picker(
+                "",
+                selection: $selectedPage
+            ) {
+
+                ForEach(
+                    PersonalToolPage.allCases
+                ) { page in
+
+                    Text(page.rawValue)
+                        .tag(page)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+
             Button {
 
-                Task {
-                    await refresh()
-                }
+                refreshCurrentPage()
 
             } label: {
 
-                if isLoading {
+                if currentPageIsRefreshing {
 
                     ProgressView()
                         .controlSize(.small)
@@ -181,26 +234,52 @@ struct SettingsView: View {
                 width: 28,
                 height: 28
             )
-            .disabled(isLoading)
-            .help("刷新 Ollama 状态")
+            .disabled(currentPageIsRefreshing)
+            .help(
+                selectedPage == .translation
+                ? "刷新 Ollama 状态"
+                : "刷新 AI 用量"
+            )
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
     }
 
-    // MARK: - Ollama
+    private var currentPageIsRefreshing: Bool {
+        switch selectedPage {
+        case .translation:
+            return isLoading
+        case .usage:
+            return usageStore.isRefreshing
+        }
+    }
+
+    private func refreshCurrentPage() {
+        switch selectedPage {
+        case .translation:
+            Task {
+                await refresh()
+            }
+        case .usage:
+            Task {
+                await usageStore.refresh()
+            }
+        }
+    }
+
+    // MARK: - Ollama Connection
 
     private var connectionSection: some View {
 
         settingsSection(
-            title: "OLLAMA",
+            title: "OLLAMA 连接",
             systemImage: "server.rack"
         ) {
 
             VStack(spacing: 12) {
 
                 settingsRow(
-                    title: "状态"
+                    title: "服务状态"
                 ) {
 
                     if isLoading {
@@ -252,7 +331,7 @@ struct SettingsView: View {
                 rowDivider
 
                 settingsRow(
-                    title: "地址"
+                    title: "服务地址"
                 ) {
 
                     TextField(
@@ -261,7 +340,7 @@ struct SettingsView: View {
                     )
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
-                    .frame(width: 280)
+                    .frame(width: 320)
                     .onSubmit {
 
                         Task {
@@ -297,14 +376,14 @@ struct SettingsView: View {
     private var modelSection: some View {
 
         settingsSection(
-            title: "模型",
+            title: "模型选择",
             systemImage: "cpu"
         ) {
 
             VStack(spacing: 11) {
 
                 settingsRow(
-                    title: "当前模型"
+                    title: "当前翻译模型"
                 ) {
 
                     Picker(
@@ -329,7 +408,7 @@ struct SettingsView: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 250)
+                    .frame(width: 280)
                 }
 
                 if let selectedModel {
@@ -379,12 +458,12 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Translation
+    // MARK: - Translation Style
 
     private var translationSection: some View {
 
         settingsSection(
-            title: "翻译",
+            title: "翻译偏好与风格",
             systemImage: "text.bubble"
         ) {
 
@@ -394,7 +473,7 @@ struct SettingsView: View {
             ) {
 
                 settingsRow(
-                    title: "默认风格"
+                    title: "默认翻译风格"
                 ) {
 
                     Picker(
@@ -411,14 +490,14 @@ struct SettingsView: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 170)
+                    .frame(width: 200)
                 }
 
                 Text(
                     selectedTranslationStyle.shortDescription
                 )
                 .font(
-                    .system(size: 10)
+                    .system(size: 11)
                 )
                 .foregroundStyle(.tertiary)
                 .frame(
@@ -430,7 +509,7 @@ struct SettingsView: View {
 
                 VStack(
                     alignment: .leading,
-                    spacing: 7
+                    spacing: 8
                 ) {
 
                     HStack {
@@ -446,10 +525,10 @@ struct SettingsView: View {
                         Text(
                             selectedTranslationStyle == .custom
                             ? "当前生效"
-                            : "选择“自定义”时生效"
+                            : "选择“自定义”风格时生效"
                         )
                         .font(
-                            .system(size: 9)
+                            .system(size: 10)
                         )
                         .foregroundStyle(
                             selectedTranslationStyle == .custom
@@ -465,10 +544,10 @@ struct SettingsView: View {
                     )
                     .textFieldStyle(.plain)
                     .font(
-                        .system(size: 11)
+                        .system(size: 12)
                     )
-                    .lineLimit(4...7)
-                    .padding(10)
+                    .lineLimit(3...6)
+                    .padding(12)
                     .background {
 
                         RoundedRectangle(
@@ -486,16 +565,16 @@ struct SettingsView: View {
                             style: .continuous
                         )
                         .stroke(
-                            Color.primary.opacity(0.05),
+                            Color.primary.opacity(0.06),
                             lineWidth: 1
                         )
                     }
 
                     Text(
-                        "自定义 Prompt 只作为附加风格指令，不会覆盖 Local Translate 的基础翻译规则、翻译方向和代码保护规则。留空时等同于默认风格。"
+                        "自定义 Prompt 作为附加风格指令，不会破坏技术标识符和代码块的保护规则。留空时等同于默认风格。"
                     )
                     .font(
-                        .system(size: 9)
+                        .system(size: 10)
                     )
                     .foregroundStyle(.tertiary)
                     .fixedSize(
@@ -512,7 +591,7 @@ struct SettingsView: View {
     private var runtimeSection: some View {
 
         settingsSection(
-            title: "运行",
+            title: "运行与内存",
             systemImage: "gauge.with.dots.needle.50percent"
         ) {
 
@@ -568,17 +647,17 @@ struct SettingsView: View {
                     )
 
                     detailRow(
-                        title: "模型状态",
+                        title: "模型加载状态",
                         value:
                             diagnostics?.isRunning == true
-                            ? "已加载"
-                            : "未加载"
+                            ? "已在内存中加载"
+                            : "就绪 (未常驻)"
                     )
 
                     rowDivider
 
                     settingsRow(
-                        title: "模型驻留时间"
+                        title: "模型驻留时间 (Keep Alive)"
                     ) {
 
                         Picker(
@@ -603,21 +682,20 @@ struct SettingsView: View {
                                 .tag("1h")
                         }
                         .labelsHidden()
-                        .frame(width: 150)
+                        .frame(width: 170)
                     }
 
                     Text(
-                        "KV Cache 量化由 Ollama Server 的 OLLAMA_KV_CACHE_TYPE 控制，当前 Ollama API 不直接返回该值。"
+                        "KV Cache 量化由 Ollama Server 环境变量 OLLAMA_KV_CACHE_TYPE 控制。"
                     )
                     .font(
-                        .system(size: 9)
+                        .system(size: 10)
                     )
                     .foregroundStyle(.tertiary)
                     .frame(
                         maxWidth: .infinity,
                         alignment: .leading
                     )
-                    .padding(.top, 2)
                 }
 
                 if let diagnosticsError {
@@ -647,12 +725,12 @@ struct SettingsView: View {
     private var shortcutSection: some View {
 
         settingsSection(
-            title: "快捷键",
+            title: "全局快捷键",
             systemImage: "keyboard"
         ) {
 
             settingsRow(
-                title: "翻译 / 打开输入框"
+                title: "取词翻译 / 打开浮窗"
             ) {
 
                 Text("⌥ ⇧ T")
@@ -708,7 +786,7 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
 
             content()
-                .padding(14)
+                .padding(16)
                 .background {
 
                     RoundedRectangle(
@@ -745,9 +823,9 @@ struct SettingsView: View {
 
             Text(title)
                 .font(
-                    .system(size: 12)
+                    .system(size: 13)
                 )
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary.opacity(0.85))
 
             Spacer()
 
