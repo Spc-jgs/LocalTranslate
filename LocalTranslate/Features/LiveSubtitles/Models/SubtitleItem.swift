@@ -50,7 +50,6 @@ public enum SubtitleDisplayMode: String, CaseIterable, Identifiable {
 }
 
 public enum SubtitleSourceLanguage: String, CaseIterable, Identifiable {
-    case auto = "auto"
     case english = "en-US"
     case japanese = "ja-JP"
     case korean = "ko-KR"
@@ -65,7 +64,6 @@ public enum SubtitleSourceLanguage: String, CaseIterable, Identifiable {
 
     public var displayName: String {
         switch self {
-        case .auto: return "自动识别"
         case .english: return "英语 (English)"
         case .japanese: return "日语 (日本語)"
         case .korean: return "韩语 (한국어)"
@@ -80,7 +78,6 @@ public enum SubtitleSourceLanguage: String, CaseIterable, Identifiable {
 
     public var shortName: String {
         switch self {
-        case .auto: return "自动"
         case .english: return "英语"
         case .japanese: return "日语"
         case .korean: return "韩语"
@@ -91,5 +88,9 @@ public enum SubtitleSourceLanguage: String, CaseIterable, Identifiable {
         case .spanish: return "西语"
         case .russian: return "俄语"
         }
+    }
+
+    public var needsTranslationToSimplifiedChinese: Bool {
+        self != .chinese && self != .cantonese
     }
 }

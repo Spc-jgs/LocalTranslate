@@ -55,8 +55,8 @@ LocalTranslate/
 │   │   │   └── SubtitleItem.swift      # 字幕数据模型与源语言枚举
 │   │   ├── Services/
 │   │   │   ├── SystemAudioCaptureService.swift # ScreenCaptureKit 原生系统音频内录
-│   │   │   ├── LiveSpeechRecognizer.swift      # Apple SFSpeechRecognizer 离线端侧 ASR
-│   │   │   └── LiveTranslationService.swift    # 极简电影字幕流式翻译管线
+│   │   │   ├── LiveSpeechRecognizer.swift      # Apple SpeechAnalyzer 原生端侧 ASR 与 VAD
+│   │   │   └── LiveTranslationService.swift    # 现有 Ollama 模型的低延迟字幕翻译
 │   │   ├── ViewModels/
 │   │   │   └── LiveSubtitlesViewModel.swift    # 同传状态机与音频电平
 │   │   └── Views/
@@ -104,7 +104,8 @@ LocalTranslate/
 - **增量缓存保护**：扫描 `~/.grok/sessions` 与 `~/.gemini/antigravity/conversations` 必须严格核对 `fileSize` 与 `mtime`，命中缓存直接跳过磁盘 I/O（耗时 < 0.05ms）。
 
 ### 3.4 实时字幕资源释放与无感同传（防资源泄漏漂移）
-- **关闭即销毁**：实时字幕浮窗关闭或用户暂停时，必须立即调用 `stopCapture()` 释放 `SCStream` 资源并停止 `SFSpeechRecognizer`，不得在后台静默录音或空转 CPU。
+- **关闭即销毁**：实时字幕浮窗关闭或用户暂停时，必须立即调用 `stopCapture()` 释放 `SCStream`，结束 `SpeechAnalyzer` 输入流并释放语音模型，同时取消字幕翻译任务并请求 Ollama 卸载模型，不得在后台静默录音或空转 CPU。
+- **原生边界**：系统音频采集和 ASR 使用 Apple 原生框架；字幕语义翻译复用项目既有 Ollama 模型与设置，不另建 Apple Translation 语言包链路，也不新增第三方依赖。
 - **电影级视觉保护**：字幕条默认采用 `.ultraThinMaterial` 半透明黑色胶囊底色与高对比度白色文字（带暗阴影），确保在任意视频明亮背景下均清晰可读。
 
 ---

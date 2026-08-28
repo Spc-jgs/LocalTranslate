@@ -1,54 +1,101 @@
 import Foundation
-import Speech
-import AVFoundation
+@preconcurrency import Speech
+@preconcurrency import AVFoundation
 
 public protocol LiveSpeechRecognizerDelegate: AnyObject {
-    func liveSpeechRecognizerDidRecognize(text: String, isFinal: Bool)
-    func liveSpeechRecognizerDidFail(error: Error)
+    nonisolated func liveSpeechRecognizerDidRecognize(text: String, isFinal: Bool)
+    nonisolated func liveSpeechRecognizerDidFail(error: Error)
 }
 
-public final class LiveSpeechRecognizer {
+public final class LiveSpeechRecognizer: @unchecked Sendable {
 
-    public weak var delegate: LiveSpeechRecognizerDelegate?
+    public nonisolated(unsafe) weak var delegate: LiveSpeechRecognizerDelegate?
 
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    private nonisolated(unsafe) var engine: RecognitionEngine!
 
-    private var currentLanguage: SubtitleSourceLanguage = .english
-    private var lastRecognizedText: String = ""
-    private var isRunning = false
-    private let processingQueue = DispatchQueue(label: "com.shaopc.LocalTranslate.speechRecognizerQueue", qos: .userInitiated)
+    public nonisolated init(language: SubtitleSourceLanguage = .english) {
+        self.engine = RecognitionEngine(language: language) { [weak self] event in
+            guard let self else { return }
 
-    // 音频重采样管线：将 48kHz 立体声转换为 SFSpeechRecognizer 最佳声学标准 16kHz 单声道
-    private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)
-    private var audioConverter: AVAudioConverter?
-    private var cachedInputFormat: AVAudioFormat?
-
-    public init(language: SubtitleSourceLanguage = .english) {
-        self.currentLanguage = language
-        setupRecognizer(for: language)
-    }
-
-    public func setLanguage(_ language: SubtitleSourceLanguage) {
-        guard language != currentLanguage else { return }
-        self.currentLanguage = language
-
-        if isRunning {
-            startRecognitionSession()
-        } else {
-            setupRecognizer(for: language)
+            switch event {
+            case let .transcription(text, isFinal):
+                self.delegate?.liveSpeechRecognizerDidRecognize(text: text, isFinal: isFinal)
+            case let .failure(error):
+                self.delegate?.liveSpeechRecognizerDidFail(error: error)
+            }
         }
     }
 
-    public func start() throws {
+    public nonisolated func setLanguage(_ language: SubtitleSourceLanguage) {
+        Task(priority: .userInitiated) {
+            await engine.setLanguage(language)
+        }
+    }
+
+    public nonisolated func start() async throws {
+        try await engine.start()
+    }
+
+    public nonisolated func stop() async {
+        await engine.stop()
+    }
+
+    public nonisolated func appendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        Task(priority: .userInitiated) {
+            await engine.appendAudioBuffer(buffer)
+        }
+    }
+}
+
+private actor RecognitionEngine {
+
+    enum Event: @unchecked Sendable {
+        case transcription(text: String, isFinal: Bool)
+        case failure(error: Error)
+    }
+
+    private var currentLanguage: SubtitleSourceLanguage
+    private let eventHandler: @Sendable (Event) -> Void
+
+    private var analyzer: SpeechAnalyzer?
+    private var transcriber: SpeechTranscriber?
+    private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
+    private var analysisTask: Task<Void, Never>?
+    private var resultsTask: Task<Void, Never>?
+    private var currentTranscript = AttributedString()
+
+    private var analyzerFormat: AVAudioFormat?
+    private var audioConverter: AVAudioConverter?
+    private var converterInputFormat: AVAudioFormat?
+    private var isRunning = false
+
+    init(
+        language: SubtitleSourceLanguage,
+        eventHandler: @escaping @Sendable (Event) -> Void
+    ) {
+        self.currentLanguage = language
+        self.eventHandler = eventHandler
+    }
+
+    func setLanguage(_ language: SubtitleSourceLanguage) async {
+        guard language != currentLanguage else { return }
+        currentLanguage = language
+
+        guard isRunning else { return }
+
+        await stop()
+        do {
+            try await start()
+        } catch {
+            eventHandler(.failure(error: error))
+        }
+    }
+
+    func start() async throws {
         guard !isRunning else { return }
 
-        // 申请或检查语音识别授权
-        let status = SFSpeechRecognizer.authorizationStatus()
-        if status == .notDetermined {
-            SFSpeechRecognizer.requestAuthorization { _ in }
-        } else if status == .denied || status == .restricted {
+        let authorization = await speechAuthorizationStatus()
+        guard authorization == .authorized else {
             throw NSError(
                 domain: "LiveSpeechRecognizer",
                 code: 1,
@@ -56,144 +103,217 @@ public final class LiveSpeechRecognizer {
             )
         }
 
+        guard SpeechTranscriber.isAvailable else {
+            throw NSError(
+                domain: "LiveSpeechRecognizer",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "当前 Mac 不支持新的端侧语音识别模型。"]
+            )
+        }
+
+        let requestedLocale = Locale(identifier: currentLanguage.rawValue)
+        guard let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: requestedLocale) else {
+            throw NSError(
+                domain: "LiveSpeechRecognizer",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "当前端侧语音模型暂不支持所选语言。"]
+            )
+        }
+
+        let transcriber = SpeechTranscriber(
+            locale: supportedLocale,
+            preset: .timeIndexedProgressiveTranscription
+        )
+        let detector = SpeechDetector(
+            detectionOptions: .init(sensitivityLevel: .medium),
+            reportResults: false
+        )
+        let modules: [any SpeechModule] = [transcriber, detector]
+
+        if let installationRequest = try await AssetInventory.assetInstallationRequest(supporting: modules) {
+            try await installationRequest.downloadAndInstall()
+        }
+        try Task.checkCancellation()
+
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules) else {
+            throw NSError(
+                domain: "LiveSpeechRecognizer",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "无法为端侧语音识别创建兼容音频格式。"]
+            )
+        }
+
+        let options = SpeechAnalyzer.Options(
+            priority: .userInitiated,
+            modelRetention: .whileInUse
+        )
+        let analyzer = SpeechAnalyzer(modules: modules, options: options)
+        try await analyzer.prepareToAnalyze(in: format)
+        try Task.checkCancellation()
+
+        let (inputStream, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
+
+        self.transcriber = transcriber
+        self.analyzer = analyzer
+        self.analyzerFormat = format
+        self.inputContinuation = continuation
+        self.currentTranscript = AttributedString()
         self.isRunning = true
-        startRecognitionSession()
-    }
 
-    public func stop() {
-        guard isRunning else { return }
-        self.isRunning = false
-        stopRecognitionSession()
-    }
-
-    public func appendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard isRunning, let request = self.recognitionRequest else { return }
-
-        // 重采样为 16kHz 单声道以极大增强歌曲/背景音乐环境下的人声分离识别率
-        let processedBuffer = resampleAudioBuffer(buffer)
-        request.append(processedBuffer)
-    }
-
-    // MARK: - Audio Resampling
-
-    private func resampleAudioBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
-        guard let targetFormat = self.targetFormat else { return buffer }
-
-        if buffer.format == targetFormat {
-            return buffer
-        }
-
-        if audioConverter == nil || cachedInputFormat != buffer.format {
-            cachedInputFormat = buffer.format
-            audioConverter = AVAudioConverter(from: buffer.format, to: targetFormat)
-        }
-
-        guard let converter = audioConverter else { return buffer }
-
-        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
-        let targetCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: targetCapacity) else {
-            return buffer
-        }
-
-        var isConsumed = false
-        var error: NSError?
-
-        let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-            if !isConsumed {
-                outStatus.pointee = .haveData
-                isConsumed = true
-                return buffer
-            } else {
-                outStatus.pointee = .noDataNow
-                return nil
+        self.resultsTask = Task { [weak self] in
+            do {
+                for try await result in transcriber.results {
+                    guard !Task.isCancelled else { return }
+                    await self?.consume(result)
+                }
+            } catch {
+                await self?.emitFailureIfRunning(error)
             }
         }
 
-        if status == .haveData || status == .inputRanDry {
-            return outputBuffer
+        self.analysisTask = Task { [weak self] in
+            do {
+                _ = try await analyzer.analyzeSequence(inputStream)
+            } catch {
+                await self?.emitFailureIfRunning(error)
+            }
         }
-
-        return buffer
     }
 
-    // MARK: - Private Session Setup
+    func stop() async {
+        guard isRunning || analyzer != nil else { return }
 
-    private func setupRecognizer(for language: SubtitleSourceLanguage) {
-        let locale: Locale
-        if language == .auto {
-            locale = Locale(identifier: "en-US")
-        } else {
-            locale = Locale(identifier: language.rawValue)
+        isRunning = false
+        inputContinuation?.finish()
+        inputContinuation = nil
+
+        if let analyzer {
+            await analyzer.cancelAndFinishNow()
         }
 
-        self.speechRecognizer = SFSpeechRecognizer(locale: locale)
+        analysisTask?.cancel()
+        resultsTask?.cancel()
+        analysisTask = nil
+        resultsTask = nil
+
+        analyzer = nil
+        transcriber = nil
+        analyzerFormat = nil
+        audioConverter = nil
+        converterInputFormat = nil
+        currentTranscript = AttributedString()
+
+        await SpeechModels.endRetention()
     }
 
-    private func startRecognitionSession() {
-        stopRecognitionSession()
-
-        setupRecognizer(for: currentLanguage)
-
-        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
+    func appendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard isRunning,
+              let continuation = inputContinuation,
+              let analyzerFormat else {
             return
         }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.taskHint = .dictation
-
-        if #available(macOS 13, *) {
-            // 在歌曲和快语速场景下关闭强制标点预测，避免标点回退导致丢词卡顿
-            request.addsPunctuation = false
+        if formatsMatch(buffer.format, analyzerFormat) {
+            continuation.yield(AnalyzerInput(buffer: buffer))
+            return
         }
 
-        self.recognitionRequest = request
-        self.lastRecognizedText = ""
+        guard let convertedBuffer = convert(buffer, to: analyzerFormat) else { return }
+        continuation.yield(AnalyzerInput(buffer: convertedBuffer))
+    }
 
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self, weak request] result, error in
-            guard let self else { return }
+    private func convert(
+        _ inputBuffer: AVAudioPCMBuffer,
+        to outputFormat: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        if audioConverter == nil || converterInputFormat != inputBuffer.format {
+            converterInputFormat = inputBuffer.format
+            audioConverter = AVAudioConverter(from: inputBuffer.format, to: outputFormat)
+        }
 
-            // 严格核对回调是否属于当前活跃的 request，避免被取消的旧任务触发循环竞争
-            guard self.recognitionRequest === request else { return }
+        guard let audioConverter else { return nil }
 
-            if let result {
-                let transcription = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !transcription.isEmpty && transcription != self.lastRecognizedText {
-                    self.lastRecognizedText = transcription
-                    self.delegate?.liveSpeechRecognizerDidRecognize(text: transcription, isFinal: result.isFinal)
-                }
+        let ratio = outputFormat.sampleRate / inputBuffer.format.sampleRate
+        let capacity = AVAudioFrameCount(ceil(Double(inputBuffer.frameLength) * ratio) + 32)
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: max(capacity, 1)
+        ) else {
+            return nil
+        }
 
-                if result.isFinal {
-                    self.restartSession()
-                }
+        var suppliedInput = false
+        var conversionError: NSError?
+        let status = audioConverter.convert(to: outputBuffer, error: &conversionError) { _, inputStatus in
+            if suppliedInput {
+                inputStatus.pointee = .noDataNow
+                return nil
             }
 
-            if let error {
-                let nsError = error as NSError
-                let silentCodes = [203, 209, 216, 1110]
-                if !silentCodes.contains(nsError.code) && self.isRunning && nsError.code != 1700 {
-                    self.delegate?.liveSpeechRecognizerDidFail(error: error)
-                }
-                if self.isRunning {
-                    self.restartSession()
-                }
-            }
+            suppliedInput = true
+            inputStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        guard conversionError == nil,
+              status != .error,
+              outputBuffer.frameLength > 0 else {
+            return nil
+        }
+
+        return outputBuffer
+    }
+
+    private func formatsMatch(_ lhs: AVAudioFormat, _ rhs: AVAudioFormat) -> Bool {
+        lhs.sampleRate == rhs.sampleRate
+            && lhs.channelCount == rhs.channelCount
+            && lhs.commonFormat == rhs.commonFormat
+            && lhs.isInterleaved == rhs.isInterleaved
+    }
+
+    private func emitTranscription(_ text: String, isFinal: Bool) {
+        guard isRunning else { return }
+        eventHandler(.transcription(text: text, isFinal: isFinal))
+    }
+
+    private func consume(_ result: SpeechTranscriber.Result) {
+        guard isRunning else { return }
+
+        // Progressive results revise an audio time range; they are not complete
+        // replacement strings. Merge by time range as required by SpeechTranscriber.
+        if let rangeToReplace = currentTranscript
+            .rangeOfAudioTimeRangeAttributes(intersecting: result.range) {
+            currentTranscript.replaceSubrange(rangeToReplace, with: result.text)
+        } else {
+            currentTranscript.append(result.text)
+        }
+
+        let text = String(currentTranscript.characters)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        emitTranscription(text, isFinal: result.isFinal)
+
+        // A finalized range won't be revised again. Start a fresh caption window
+        // so a long-running session doesn't repeatedly resend old dialogue.
+        if result.isFinal {
+            currentTranscript = AttributedString()
         }
     }
 
-    private func stopRecognitionSession() {
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-
-        recognitionRequest = nil
-        recognitionTask = nil
+    private func emitFailureIfRunning(_ error: Error) {
+        guard isRunning else { return }
+        eventHandler(.failure(error: error))
     }
 
-    private func restartSession() {
-        processingQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self, self.isRunning else { return }
-            self.startRecognitionSession()
+    private func speechAuthorizationStatus() async -> SFSpeechRecognizerAuthorizationStatus {
+        let currentStatus = SFSpeechRecognizer.authorizationStatus()
+        guard currentStatus == .notDetermined else { return currentStatus }
+
+        return await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
         }
     }
 }

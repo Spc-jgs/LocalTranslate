@@ -23,8 +23,8 @@
 
 ### 2. 电影/音视频实时同传中文字幕 (Live Subtitles)
 - **免装虚拟声卡**：基于 macOS 原生 **`ScreenCaptureKit`** 系统音频内录，无需安装任何 BlackHole / Soundflower 虚拟声卡驱动，即开即用。
-- **端侧离线语音识别**：基于 Apple 原生 **`SFSpeechRecognizer`**（硬件加速），支持日语、韩语、英语、普通话、粤语等多语种实时流式转录。
-- **电影级流式翻译 (⌥⇧C)**：复用本地大模型以“电影字幕”精炼口语风格毫秒级流式生成中文译文。
+- **端侧离线语音识别**：基于 Apple 原生 **`SpeechAnalyzer` + `SpeechTranscriber`**，使用系统 VAD 区分可修订与已确认文本，支持多语种低延迟流式转录。
+- **AI 模型流式翻译 (⌥⇧C)**：复用文本翻译已配置的本地 **Ollama 模型**生成中文字幕；单请求在途、持续语音自动追赶最新识别文本，暂停后主动释放模型。
 - **极简电影悬浮字幕条**：
   - 屏幕底部半透明深色磨砂胶囊底色；
   - 高对比度纯白主译文字体（带抗背景反光柔和阴影）+ 原文对照；
@@ -70,7 +70,7 @@ LocalTranslate/
 │   │
 │   ├── LiveSubtitles/                  # 实时音视频同传中文字幕
 │   │   ├── Models/                     # 字幕模型 (SubtitleItem)
-│   │   ├── Services/                   # ScreenCaptureKit 内录、Apple ASR 识别、流式字幕翻译
+│   │   ├── Services/                   # ScreenCaptureKit 内录、SpeechAnalyzer 识别、Ollama 模型翻译
 │   │   ├── ViewModels/                 # 同传状态机与音频电平 (LiveSubtitlesViewModel)
 │   │   └── Views/                      # 电影级半透明磨砂字幕浮窗 (LiveSubtitlesView)
 │   │
