@@ -1,20 +1,20 @@
 # AGENTS.md · LocalTranslate 架构与开发协作规范
 
-本文档面向维护和扩展 **LocalTranslate** 项目的 AI Agent 与人类开发者。在对本项目进行任何修改、重构或新增功能前，请务必遵守以下架构原则与性能基准。
+本文档面向维护和扩展 **LocalTranslate** 项目的 AI Agent 与人类开发者。在对本项目进行任何修改、重构或新增功能前，请务必遵守以下架构原则与性能基准，严防代码与架构漂移。
 
 ---
 
 ## 1. 项目定位与核心设计哲学
 
 - **本机轻量级小工具 (Native Micro-Tools Hub)**：项目为 macOS 用户提供无感常驻的个人 AI 工具集。
-- **单工具完全解耦 (Strict Feature Isolation)**：每个工具（如“翻译浮窗”、“AI 用量看板”）作为独立特性模块存在，彼此互不依赖，单工具异常不得影响其他工具正常运行。
+- **单工具完全解耦 (Strict Feature Isolation)**：每个微工具（如“翻译浮窗”、“AI 用量看板”）作为独立特性模块存在，彼此互不依赖，单工具异常不得影响其他工具正常运行。
 - **按需加载与零空闲开销 (Lazy Loading & Zero Idle Cost)**：
   - 未激活的工具禁止在后台占用 CPU 或持有高内存对象。
   - 用户仅使用翻译功能时，AI 用量模块不得被加载，内存保持在最低基线（约 20~30MB）。
   - 设置页面切出或窗口关闭时，必须挂起或销毁后台定时刷新任务。
-- **主线程非阻塞 (Never Block MainActor)**：
+- **主线程绝对非阻塞 (Never Block MainActor)**：
   - 严禁在主线程执行文件枚举、全量日志解析、子进程创建（如 `codex app-server` / `zsh`）或网络 I/O。
-  - 耗时任务一律派发至 `.utility` 或 `.background` QoS 后台任务。
+  - 耗时任务一律派发至 `.utility` 或 `.background` QoS 异步后台任务。
 
 ---
 
@@ -26,13 +26,13 @@
 LocalTranslate/
 ├── App/                                # 应用入口与全局生命周期
 │   ├── LocalTranslateApp.swift         # MenuBarExtra 常驻、AppDelegate、浮窗调度
-│   └── Assets.xcassets                 # 图标与配色资源
+│   └── Assets.xcassets                 # 全套 macOS AppIcon 与配色资源
 │
 ├── Core/                               # 跨模块共享基础层（极轻量、无业务依赖）
 │   ├── Config/
 │   │   └── AppSettings.swift           # UserDefaults 统一配置管理
 │   └── System/
-│       └── ShellResolver.swift         # CLI 可执行文件寻址（带内存缓存）
+│       └── ShellResolver.swift         # CLI 可执行文件寻址（带内存缓存与线程锁）
 │
 ├── Features/                           # 业务微工具模块（每个模块完全自包含）
 │   ├── Translate/                      # 翻译工具模块
@@ -53,13 +53,16 @@ LocalTranslate/
 │       ├── Models/
 │       │   └── UsageModels.swift       # 领域数据模型 (QuotaWindow, TokenBreakdown)
 │       ├── Services/
-│       │   ├── CodexProvider.swift     # Codex JSON-RPC app-server 提取
-│       │   ├── GrokProvider.swift      # Grok CLI API 额度与日志扫描
-│       │   └── GrokCacheStore.swift    # Grok 磁盘增量缓存管理
+│       │   ├── CodexProvider.swift     # Codex JSON-RPC app-server 提取与优雅容错
+│       │   ├── AGYProvider.swift       # AGY 步进 Protobuf 时间戳底层逆向提取
+│       │   ├── AGYCacheStore.swift     # AGY 会话增量缓存管理
+│       │   ├── GrokProvider.swift      # Grok CLI API 额度与增量日志扫描
+│       │   ├── GrokCacheStore.swift    # Grok 磁盘增量缓存管理
+│       │   └── UsageDiskCache.swift    # 全局用量快照持久化缓存
 │       ├── ViewModels/
-│       │   └── UsageStore.swift        # 数据调度中心 (并发聚合、预计算指标)
+│       │   └── UsageStore.swift        # 数据调度中心 (单例常驻、并发聚合、预计算指标)
 │       └── Views/
-│           └── AIUsageView.swift       # 用量趋势图表与各账号卡片
+│           └── AIUsageView.swift       # 全模型归一分布、趋势图与账号卡片
 │
 ├── Settings/                           # 统一设置窗口
 │   └── SettingsView.swift              # 多分页懒加载装配容器
@@ -70,31 +73,25 @@ LocalTranslate/
 
 ---
 
-## 3. 性能红线与开发规范
+## 3. 核心架构红线与防漂移守则
 
-### 3.1 AI 用量模块 (Features/AIUsage)
-1. **大文件快速预过滤**：
-   - 扫描 `~/.grok/sessions` 等日志目录时，禁止全量反序列化 JSON。
-   - 必须通过 `line.contains("turn_completed")` 等轻量字符预过滤跳过 99% 的流式 chunk。
-2. **磁盘增量缓存 (GrokCacheStore)**：
-   - 每次扫描记录文件的 `fileSize` 与 `contentModificationDate`。
-   - 未修改的文件直接命中缓存，严禁产生磁盘 I/O。
-   - 缓存写入在 `.background` 优先级异步落盘（`~/Library/Caches/LocalTranslate/grok_sessions_cache.json`）。
-3. **并发调度 (UsageStore)**：
-   - 使用 `withTaskGroup` 并行请求多个 Provider。
-   - 图表统计指标（如 7 天 / 30 天聚合）由 ViewModel 预计算生成，禁止在 SwiftUI `body` 内做高频循环或排序。
-4. **生命周期绑定**：
-   - 在 `SettingsView` 中使用懒加载（`@State private var usageStore: UsageStore?`）。
-   - 离开用量页面或关闭窗口时调用 `store.stop()` 暂停轮询。
+### 3.1 跨账号模型全局归一化（防重复漂移）
+- **唯一展示原则**：全景模型用量看板中的模型必须按 `modelID` 全局合并归一。
+- **禁止在单个账号卡片内重复展示模型列表**：账号卡片仅聚焦展示账号配额窗口（5h / Weekly / Reset）与用量时间汇总（今日 / 7天 / 30天 / 历史），模型明细统一收敛在顶部的“模型 Token 用量（按模型分组）”卡片中。
 
-### 3.2 翻译模块 (Features/Translate)
-1. **代码与技术标识符保护**：
-   - `OllamaClient.swift` 中的 `systemPrompt` 严格约束代码、变量名、API 路径、JSON Key 不被意料外汉化。
-2. **浮窗伸缩与频闪控制**：
-   - 流式输出中保持固定高度预估，避免 token 追加导致窗口剧烈跳动。
-   - 屏幕边界与鼠标吸附计算必须防止窗口在小屏幕或副屏上越界。
-3. **剪贴板保护**：
-   - `SelectedTextReader` 使用剪贴板兜底方案后，必须立即恢复用户原本的剪贴板历史数据。
+### 3.2 优雅降级与软失败机制（防 UI 报错漂移）
+- **禁止单一子请求失败导致整卡崩溃**：
+  - 当某个 Provider（如 OpenAI `codex app-server`）的 `account/usage/read` 接口网络超时或返回 `token usage profile fetch timed out` 时，**严禁抛出致命异常并展示黄色警告条**。
+  - 必须保留已成功获取的账号身份与配额窗口，并无缝回退至本地 SQLite 日志或已持久化的磁盘快照（`UsageDiskCache`），将信任度标记为 `.medium`。
+
+### 3.3 切页零开销与即时渲染（防体感卡顿漂移）
+- **切页禁发子进程**：切换到“AI 用量”分页时，**禁止在首帧触发任何 `Process()` 子进程或全量磁盘扫描**。
+- **快照即时呈现**：直接从内存及 `UsageDiskCache` 渲染已有快照（渲染耗时 < 1ms，120 FPS 丝滑切换）。
+- **增量缓存保护**：扫描 `~/.grok/sessions` 与 `~/.gemini/antigravity/conversations` 必须严格核对 `fileSize` 与 `mtime`，命中缓存直接跳过磁盘 I/O（耗时 < 0.05ms）。
+
+### 3.4 翻译模块无感体验（防功能漂移）
+- **功能严格守恒**：不对翻译模块随意增删功能，专注打磨流式响应速度、视觉层次、字体排版、代码保护与快捷键体验。
+- **剪贴板保护**：`SelectedTextReader` 使用剪贴板兜底取词后，必须立即无缝恢复用户原本的剪贴板历史数据。
 
 ---
 

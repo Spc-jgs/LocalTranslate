@@ -47,8 +47,8 @@ final class AGYCacheStore: @unchecked Sendable {
 
     func set(path: String, entry: CachedTranscriptEntry) {
         lock.lock()
+        defer { lock.unlock() }
         inMemoryCache[path] = entry
-        lock.unlock()
     }
 
     func saveToDisk() {
