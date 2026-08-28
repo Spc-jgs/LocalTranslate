@@ -391,6 +391,7 @@ final class AppDelegate:
             )
         }
 
+        panel.markDisplayed()
         panel.makeKeyAndOrderFront(
             nil
         )
@@ -422,9 +423,11 @@ final class AppDelegate:
             )
         }
 
+        panel.markDisplayed()
         panel.makeKeyAndOrderFront(
             nil
         )
+        panel.orderFrontRegardless()
     }
 
     private func centerPanelOnCurrentScreen(

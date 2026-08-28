@@ -4,6 +4,8 @@ import AppKit
 final class FloatingPanel: NSPanel {
 
     var isPinned = false
+    private var displayedAt: Date = .distantPast
+    private var globalClickMonitor: Any?
 
     init<Content: View>(
         content: Content,
@@ -65,6 +67,12 @@ final class FloatingPanel: NSPanel {
         ]
 
         animationBehavior = .utilityWindow
+
+        setupGlobalClickMonitor()
+    }
+
+    func markDisplayed() {
+        displayedAt = Date()
     }
 
     override var canBecomeKey: Bool {
@@ -76,26 +84,48 @@ final class FloatingPanel: NSPanel {
     }
 
     // Esc 始终可以隐藏
-    override func cancelOperation(
-        _ sender: Any?
-    ) {
+    override func cancelOperation(_ sender: Any?) {
         orderOut(nil)
     }
 
-    // 点击其他 App：
-    //
-    // 未钉住 → 自动隐藏
-    // 已钉住   → 保持显示
+    // 点击其他 App 且未钉住时：通过时间阈值与全局点击监听器平滑隐藏
     override func resignKey() {
-
         super.resignKey()
 
         guard !isPinned else {
             return
         }
 
+        // 忽略弹出瞬间 (350ms 内) 系统自动派发的焦点丢失事件
+        guard Date().timeIntervalSince(displayedAt) > 0.35 else {
+            return
+        }
+
         DispatchQueue.main.async { [weak self] in
-            self?.orderOut(nil)
+            guard let self, !self.isPinned else { return }
+            self.orderOut(nil)
+        }
+    }
+
+    private func setupGlobalClickMonitor() {
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            guard let self, self.isVisible, !self.isPinned else { return }
+            guard Date().timeIntervalSince(self.displayedAt) > 0.35 else { return }
+
+            let mouseLocation = NSEvent.mouseLocation
+            if !self.frame.contains(mouseLocation) {
+                DispatchQueue.main.async {
+                    self.orderOut(nil)
+                }
+            }
+        }
+    }
+
+    deinit {
+        if let monitor = globalClickMonitor {
+            NSEvent.removeMonitor(monitor)
         }
     }
 }
