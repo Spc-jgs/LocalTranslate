@@ -25,10 +25,34 @@ public struct SubtitleItem: Identifiable, Equatable {
     }
 }
 
+public enum SubtitleDisplayMode: String, CaseIterable, Identifiable {
+    case bilingual = "bilingual"
+    case chineseOnly = "chineseOnly"
+    case originalOnly = "originalOnly"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .bilingual: return "双语"
+        case .chineseOnly: return "仅译文"
+        case .originalOnly: return "仅原文"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .bilingual: return "character.bubble.fill"
+        case .chineseOnly: return "text.bubble"
+        case .originalOnly: return "character"
+        }
+    }
+}
+
 public enum SubtitleSourceLanguage: String, CaseIterable, Identifiable {
     case auto = "auto"
-    case japanese = "ja-JP"
     case english = "en-US"
+    case japanese = "ja-JP"
     case korean = "ko-KR"
     case chinese = "zh-CN"
     case cantonese = "zh-HK"
@@ -42,8 +66,8 @@ public enum SubtitleSourceLanguage: String, CaseIterable, Identifiable {
     public var displayName: String {
         switch self {
         case .auto: return "自动识别"
-        case .japanese: return "日语 (日本語)"
         case .english: return "英语 (English)"
+        case .japanese: return "日语 (日本語)"
         case .korean: return "韩语 (한국어)"
         case .chinese: return "普通话 (中文)"
         case .cantonese: return "粤语 (廣東話)"
@@ -57,8 +81,8 @@ public enum SubtitleSourceLanguage: String, CaseIterable, Identifiable {
     public var shortName: String {
         switch self {
         case .auto: return "自动"
-        case .japanese: return "日语"
         case .english: return "英语"
+        case .japanese: return "日语"
         case .korean: return "韩语"
         case .chinese: return "中文"
         case .cantonese: return "粤语"

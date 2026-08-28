@@ -6,7 +6,7 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
     public static let shared = LiveSubtitlesOverlayPanel()
 
     private init() {
-        let size = NSSize(width: 720, height: 160)
+        let size = NSSize(width: 700, height: 140)
 
         let hostingView = NSHostingView(
             rootView: LiveSubtitlesView()
@@ -17,7 +17,8 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [
                 .borderless,
-                .nonactivatingPanel
+                .nonactivatingPanel,
+                .resizable
             ],
             backing: .buffered,
             defer: false
@@ -65,7 +66,7 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
         let panelSize = self.frame.size
 
         let x = visibleFrame.midX - panelSize.width / 2
-        let y = visibleFrame.minY + 60 // 距离屏幕底部 60pt
+        let y = visibleFrame.minY + 50 // 距离屏幕底部 50pt
 
         self.setFrameOrigin(NSPoint(x: x, y: y))
     }

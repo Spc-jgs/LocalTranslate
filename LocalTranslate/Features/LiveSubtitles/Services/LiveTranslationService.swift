@@ -6,38 +6,69 @@ public final class LiveTranslationService {
     public static let shared = LiveTranslationService()
 
     private var activeTask: Task<Void, Never>?
+    private var pendingWorkItem: DispatchWorkItem?
 
     private init() {}
 
-    /// 翻译实时字幕句子（毫秒级流式输出）
+    /// 翻译实时字幕句子（带 300ms 平滑防抖与毫秒级流式输出）
     public func translateSubtitle(
         _ text: String,
         sourceLanguage: SubtitleSourceLanguage,
+        isFinal: Bool = false,
         onPartial: @escaping @MainActor (String) -> Void,
         onCompletion: @escaping @MainActor (String) -> Void
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // 取消上一句未完成的流式任务
+        // 取消之前的待执行防抖任务
+        pendingWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.executeTranslation(
+                trimmed,
+                sourceLanguage: sourceLanguage,
+                onPartial: onPartial,
+                onCompletion: onCompletion
+            )
+        }
+
+        self.pendingWorkItem = workItem
+
+        if isFinal {
+            // 如果是断句最终确定的句子，立即执行翻译，无需等待防抖
+            workItem.perform()
+        } else {
+            // 流式中间片段：320ms 防抖，聚合连续单词
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32, execute: workItem)
+        }
+    }
+
+    private func executeTranslation(
+        _ text: String,
+        sourceLanguage: SubtitleSourceLanguage,
+        onPartial: @escaping @MainActor (String) -> Void,
+        onCompletion: @escaping @MainActor (String) -> Void
+    ) {
         activeTask?.cancel()
 
         activeTask = Task { [weak self] in
             guard let self else { return }
 
             let systemInstruction = """
-            你是一名实时影视字幕同传翻译员。
-            任务：将外语（英文/日文/韩文等）台词翻译成自然通顺、简练地道的简体中文字幕。
+            你是一名专业影视字幕同传翻译员。
+            任务：将输入的影视台词翻译为自然通顺、简练生动的简体中文字幕。
             规则：
-            1. 严禁输出任何思考过程、解释、拼音、假名、问答或标记。
-            2. 仅输出最终的中文字幕译文。
+            1. 严禁输出任何思考过程、解释、拼音、假名或前后缀，仅直接输出最终中文字幕。
+            2. 译文简练地道，符合中文母语者口语习惯。
             3. 如果输入本身已经是中文，则保持原样。
             """
 
             do {
                 guard let url = URL(string: "\(AppSettings.baseURL)/api/chat") else { return }
 
-                var request = URLRequest(url: url, timeoutInterval: 10)
+                var request = URLRequest(url: url, timeoutInterval: 12)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -45,7 +76,7 @@ public final class LiveTranslationService {
                     "model": AppSettings.model,
                     "messages": [
                         ["role": "system", "content": systemInstruction],
-                        ["role": "user", "content": trimmed]
+                        ["role": "user", "content": text]
                     ],
                     "stream": true,
                     "think": false,
@@ -78,7 +109,6 @@ public final class LiveTranslationService {
                        let content = message["content"] as? String,
                        !content.isEmpty {
 
-                        // 过滤可能夹带的 <think> 标签
                         let cleaned = content.replacingOccurrences(of: "<think>", with: "")
                                              .replacingOccurrences(of: "</think>", with: "")
 
@@ -92,12 +122,14 @@ public final class LiveTranslationService {
                     onCompletion(finalClean)
                 }
             } catch {
-                // 静默忽略取消异常
+                // 静默处理取消异常
             }
         }
     }
 
     public func cancel() {
+        pendingWorkItem?.cancel()
+        pendingWorkItem = nil
         activeTask?.cancel()
         activeTask = nil
     }

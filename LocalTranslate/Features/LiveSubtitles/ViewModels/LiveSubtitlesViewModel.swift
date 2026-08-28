@@ -12,14 +12,15 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
 
     @Published public var isRunning = false
     @Published public var sourceLanguage: SubtitleSourceLanguage = .english
+    @Published public var displayMode: SubtitleDisplayMode = .bilingual
     @Published public var audioLevel: Float = 0.0
     @Published public var currentOriginalText: String = ""
     @Published public var currentTranslatedText: String = ""
     @Published public var subtitleHistory: [SubtitleItem] = []
+    @Published public var showHistoryDrawer = false
     @Published public var errorMessage: String?
     @Published public var isClickThrough = false
-    @Published public var fontSize: CGFloat = 22.0
-    @Published public var showOriginalText = true
+    @Published public var fontSize: CGFloat = 20.0
 
     // MARK: - Services
 
@@ -30,6 +31,20 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
     private var silenceTimer: Timer?
 
     private init() {
+        // 读取持久化偏好
+        if let savedLanguage = UserDefaults.standard.string(forKey: "liveSubtitlesSourceLanguage"),
+           let lang = SubtitleSourceLanguage(rawValue: savedLanguage) {
+            self.sourceLanguage = lang
+        }
+        if let savedMode = UserDefaults.standard.string(forKey: "liveSubtitlesDisplayMode"),
+           let mode = SubtitleDisplayMode(rawValue: savedMode) {
+            self.displayMode = mode
+        }
+        let savedFontSize = UserDefaults.standard.double(forKey: "liveSubtitlesFontSize")
+        if savedFontSize >= 14 && savedFontSize <= 36 {
+            self.fontSize = CGFloat(savedFontSize)
+        }
+
         self.speechRecognizer = LiveSpeechRecognizer(language: sourceLanguage)
         self.audioCaptureService.delegate = self
         self.speechRecognizer?.delegate = self
@@ -88,16 +103,37 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
     public func setSourceLanguage(_ language: SubtitleSourceLanguage) {
         guard language != sourceLanguage else { return }
         self.sourceLanguage = language
+        UserDefaults.standard.set(language.rawValue, forKey: "liveSubtitlesSourceLanguage")
+
         self.currentOriginalText = ""
         self.currentTranslatedText = ""
         self.translationService.cancel()
         self.speechRecognizer?.setLanguage(language)
     }
 
+    public func setDisplayMode(_ mode: SubtitleDisplayMode) {
+        self.displayMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "liveSubtitlesDisplayMode")
+    }
+
+    public func adjustFontSize(delta: CGFloat) {
+        let newSize = min(max(fontSize + delta, 16), 34)
+        self.fontSize = newSize
+        UserDefaults.standard.set(Double(newSize), forKey: "liveSubtitlesFontSize")
+    }
+
+    public func toggleHistoryDrawer() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+            showHistoryDrawer.toggle()
+        }
+    }
+
     public func clearSubtitles() {
-        currentOriginalText = ""
-        currentTranslatedText = ""
-        subtitleHistory.removeAll()
+        withAnimation(.easeOut(duration: 0.2)) {
+            currentOriginalText = ""
+            currentTranslatedText = ""
+            subtitleHistory.removeAll()
+        }
     }
 
     // MARK: - SystemAudioCaptureDelegate
@@ -131,9 +167,9 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
 
             self.currentOriginalText = text
 
-            // 重置静音定时器 (如果 3.5s 没有新词输入，归档本句进入历史)
+            // 停顿断句判定：4.0 秒无声则完成本句提交
             self.silenceTimer?.invalidate()
-            self.silenceTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
+            self.silenceTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
                 Task { @MainActor in
                     self?.commitCurrentSubtitle()
                 }
@@ -143,6 +179,7 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
             self.translationService.translateSubtitle(
                 text,
                 sourceLanguage: self.sourceLanguage,
+                isFinal: isFinal,
                 onPartial: { [weak self] partial in
                     self?.currentTranslatedText = partial
                 },
@@ -163,21 +200,24 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
     }
 
     private func commitCurrentSubtitle() {
-        guard !currentOriginalText.isEmpty || !currentTranslatedText.isEmpty else { return }
+        let orig = currentOriginalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trans = currentTranslatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !orig.isEmpty || !trans.isEmpty else { return }
 
         let item = SubtitleItem(
-            originalText: currentOriginalText,
-            translatedText: currentTranslatedText.isEmpty ? "..." : currentTranslatedText,
+            originalText: orig,
+            translatedText: trans.isEmpty ? orig : trans,
             sourceLanguage: sourceLanguage.displayName,
             isFinal: true
         )
 
         subtitleHistory.append(item)
-        if subtitleHistory.count > 30 {
-            subtitleHistory.removeFirst(subtitleHistory.count - 30)
+        if subtitleHistory.count > 50 {
+            subtitleHistory.removeFirst(subtitleHistory.count - 50)
         }
 
-        // 渐隐当前字幕
+        // 平滑渐隐当前屏幕字幕
         withAnimation(.easeOut(duration: 0.3)) {
             currentOriginalText = ""
             currentTranslatedText = ""
