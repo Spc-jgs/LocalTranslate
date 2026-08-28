@@ -171,10 +171,18 @@ public struct LiveSubtitlesView: View {
                     .shadow(color: .black.opacity(0.9), radius: 3, x: 0, y: 1.5)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else if viewModel.isRunning {
-                Text("正在聆听电影/视频声音...")
-                    .font(.system(size: viewModel.fontSize * 0.75, weight: .medium))
-                    .foregroundColor(.white.opacity(0.45))
-                    .multilineTextAlignment(.center)
+                VStack(spacing: 4) {
+                    Text("正在聆听电影/视频声音...")
+                        .font(.system(size: viewModel.fontSize * 0.75, weight: .medium))
+                        .foregroundColor(.white.opacity(0.65))
+
+                    if viewModel.audioLevel < 0.02 {
+                        Text("（💡 需开启电脑声音或佩戴耳机播放，完全静音时无法提取声波）")
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.38))
+                    }
+                }
+                .multilineTextAlignment(.center)
             } else {
                 Text("点击顶部 ▶ 开启实时字幕同传")
                     .font(.system(size: viewModel.fontSize * 0.75, weight: .medium))
