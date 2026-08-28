@@ -8,21 +8,26 @@ final class HotKeyManager {
 
     private var translateHotKeyRef: EventHotKeyRef?
     private var screenshotHotKeyRef: EventHotKeyRef?
+    private var liveSubtitlesHotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
 
     private var translateAction: (() -> Void)?
     private var screenshotAction: (() -> Void)?
+    private var liveSubtitlesAction: (() -> Void)?
 
     private var lastTranslateTimestamp: TimeInterval = 0
     private var lastScreenshotTimestamp: TimeInterval = 0
+    private var lastLiveSubtitlesTimestamp: TimeInterval = 0
     private let lock = NSLock()
 
     func register(
         onTranslate: @escaping () -> Void,
-        onScreenshot: @escaping () -> Void
+        onScreenshot: @escaping () -> Void,
+        onLiveSubtitles: @escaping () -> Void = {}
     ) {
         self.translateAction = onTranslate
         self.screenshotAction = onScreenshot
+        self.liveSubtitlesAction = onLiveSubtitles
 
         guard let target = GetEventDispatcherTarget() else {
             return
@@ -48,7 +53,7 @@ final class HotKeyManager {
                     return noErr
                 }
 
-                // 仅响应按键按下事件 (忽略释放事件，但必须监听以保证 Carbon 状态机正常)
+                // 仅响应按键按下事件
                 guard GetEventKind(inEvent) == UInt32(kEventHotKeyPressed) else {
                     return noErr
                 }
@@ -88,7 +93,7 @@ final class HotKeyManager {
                         manager.translateAction?()
                     }
                 } else if hotKeyID.id == 2 {
-                    // 截图翻译防抖 600ms (严格在 Carbon 线程同步过滤重复连击)
+                    // 截图翻译防抖 600ms
                     guard now - manager.lastScreenshotTimestamp > 0.6 else {
                         return noErr
                     }
@@ -96,6 +101,16 @@ final class HotKeyManager {
 
                     DispatchQueue.main.async {
                         manager.screenshotAction?()
+                    }
+                } else if hotKeyID.id == 3 {
+                    // 实时字幕防抖 600ms
+                    guard now - manager.lastLiveSubtitlesTimestamp > 0.6 else {
+                        return noErr
+                    }
+                    manager.lastLiveSubtitlesTimestamp = now
+
+                    DispatchQueue.main.async {
+                        manager.liveSubtitlesAction?()
                     }
                 }
 
@@ -134,6 +149,20 @@ final class HotKeyManager {
             0,
             &screenshotHotKeyRef
         )
+
+        // 3. 实时字幕: ⌥⇧L (kVK_ANSI_L = 37, optionKey = 2048, shiftKey = 512)
+        let liveSubtitlesID = EventHotKeyID(
+            signature: Self.signature,
+            id: 3
+        )
+        RegisterEventHotKey(
+            UInt32(kVK_ANSI_L),
+            UInt32(optionKey | shiftKey),
+            liveSubtitlesID,
+            target,
+            0,
+            &liveSubtitlesHotKeyRef
+        )
     }
 
     deinit {
@@ -142,6 +171,9 @@ final class HotKeyManager {
         }
         if let screenshotHotKeyRef {
             UnregisterEventHotKey(screenshotHotKeyRef)
+        }
+        if let liveSubtitlesHotKeyRef {
+            UnregisterEventHotKey(liveSubtitlesHotKeyRef)
         }
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)

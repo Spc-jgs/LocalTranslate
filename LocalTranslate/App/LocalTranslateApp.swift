@@ -53,6 +53,13 @@ private struct MenuBarContent: View {
             )
         }
 
+        Button("实时音视频字幕 (⌥⇧L)") {
+            NotificationCenter.default.post(
+                name: .triggerLiveSubtitles,
+                object: nil
+            )
+        }
+
         Button("输入翻译窗口") {
             NotificationCenter.default.post(
                 name: .showTranslatePanel,
@@ -182,6 +189,9 @@ final class AppDelegate:
             },
             onScreenshot: { [weak self] in
                 self?.handleScreenshotHotKey()
+            },
+            onLiveSubtitles: { [weak self] in
+                self?.handleLiveSubtitlesHotKey()
             }
         )
 
@@ -221,6 +231,18 @@ final class AppDelegate:
                     ),
                 name:
                     .triggerScreenshotOCR,
+                object: nil
+            )
+
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector:
+                    #selector(
+                        handleLiveSubtitlesNotification
+                    ),
+                name:
+                    .triggerLiveSubtitles,
                 object: nil
             )
     }
@@ -355,6 +377,28 @@ final class AppDelegate:
     @objc
     private func handleScreenshotOCRNotification(_ notification: Notification) {
         handleScreenshotHotKey()
+    }
+
+    @objc
+    private func handleLiveSubtitlesNotification(_ notification: Notification) {
+        handleLiveSubtitlesHotKey()
+    }
+
+    // MARK: - Live Subtitles HotKey
+
+    private func handleLiveSubtitlesHotKey() {
+        let overlay = LiveSubtitlesOverlayPanel.shared
+        let vm = LiveSubtitlesViewModel.shared
+
+        if overlay.isVisible {
+            vm.stop()
+            overlay.orderOut(nil)
+        } else {
+            overlay.positionAtScreenBottom()
+            overlay.makeKeyAndOrderFront(nil)
+            overlay.orderFrontRegardless()
+            vm.start()
+        }
     }
 
     // MARK: - Normal Panel Show
@@ -1083,5 +1127,10 @@ extension Notification.Name {
     static let triggerScreenshotOCR =
         Notification.Name(
             "triggerScreenshotOCR"
+        )
+
+    static let triggerLiveSubtitles =
+        Notification.Name(
+            "triggerLiveSubtitles"
         )
 }

@@ -3,7 +3,7 @@
 <p align="center">
   <b>极轻量 · 零干扰 · 强隔离 · 本地隐私安全</b>
   <br>
-  专为 macOS 打造的极简状态栏小工具集合：本地大模型即时划词/截图翻译 + 多账号 AI 用量监控看板。
+  专为 macOS 打造的极简状态栏小工具集合：本地大模型即时划词/截图翻译 + 电影实时音视频同传中文字幕 + 多账号 AI 用量监控看板。
 </p>
 
 ---
@@ -21,7 +21,16 @@
 - **多种翻译风格**：内置“默认”、“自然”、“简洁”、“正式”、“直译”及“自定义 Prompt”风格，灵活应对日常阅读、代码注释或商务邮件。
 - **智能交互浮窗**：自动贴靠鼠标坐标与屏幕边界，流式生成平滑展示，支持置顶钉住 (`Pin`)、`Esc` 退出与一键复制反馈。
 
-### 2. AI 用量监控看板 (AI Usage Hub)
+### 2. 电影/音视频实时同传中文字幕 (Live Subtitles)
+- **免装虚拟声卡**：基于 macOS 原生 **`ScreenCaptureKit`** 系统音频内录，无需安装任何 BlackHole / Soundflower 虚拟声卡驱动，即开即用。
+- **端侧离线语音识别**：基于 Apple 原生 **`SFSpeechRecognizer`**（硬件加速），支持日语、韩语、英语、普通话、粤语等多语种实时流式转录。
+- **电影级流式翻译 (⌥⇧L)**：复用本地大模型以“电影字幕”精炼口语风格毫秒级流式生成中文译文。
+- **极简电影悬浮字幕条**：
+  - 屏幕底部半透明深色磨砂胶囊底色；
+  - 高对比度纯白主译文字体（带抗背景反光柔和阴影）+ 原文对照；
+  - 悬停浮现控制栏：源语言切换、字号微调、动态音浪感知、鼠标穿透。
+
+### 3. AI 用量监控看板 (AI Usage Hub)
 - **全方位 Provider 汇聚**：
   - **Codex Plus A** (`~/.codex`)
   - **Codex Plus B** (`~/.codex_account2`)
@@ -59,6 +68,12 @@ LocalTranslate/
 │   │   ├── ViewModels/                 # 翻译状态机
 │   │   └── Views/                      # 悬浮面板、主界面、无滚动条流式文本框
 │   │
+│   ├── LiveSubtitles/                  # 实时音视频同传中文字幕
+│   │   ├── Models/                     # 字幕模型 (SubtitleItem)
+│   │   ├── Services/                   # ScreenCaptureKit 内录、Apple ASR 识别、流式字幕翻译
+│   │   ├── ViewModels/                 # 同传状态机与音频电平 (LiveSubtitlesViewModel)
+│   │   └── Views/                      # 电影级半透明磨砂字幕浮窗 (LiveSubtitlesView)
+│   │
 │   └── AIUsage/                        # AI 用量看板
 │       ├── Models/                     # 统一领域模型 (AccountSnapshot, TokenBreakdown)
 │       ├── Services/                   # Codex 容错 Runner、AGY Protobuf 扫描器、Grok 扫描器、增量缓存
@@ -80,6 +95,7 @@ LocalTranslate/
 | :--- | :--- | :--- |
 | `⌥ ⇧ T` | **智能取词翻译 / 呼出浮窗** | 全局任何应用程序中 |
 | `⌥ ⇧ S` | **交互式截图翻译** | 全局任何应用程序中 |
+| `⌥ ⇧ L` | **开启/暂停/隐藏实时音视频中文字幕条** | 看电影/视频/YouTube/Netflix 时 |
 | `⌘ ↩` | **立即翻译 / 重新翻译** | 翻译浮窗激活时 |
 | `Esc` | **隐藏浮窗 / 取消截图** | 浮窗激活或截图框选时 |
 | `⌘ ,` | **打开个人工具设置** | 任意界面 |

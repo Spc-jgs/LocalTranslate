@@ -7,11 +7,11 @@
 ## 1. 项目定位与核心设计哲学
 
 - **本机轻量级小工具 (Native Micro-Tools Hub)**：项目为 macOS 用户提供无感常驻的个人 AI 工具集。
-- **单工具完全解耦 (Strict Feature Isolation)**：每个微工具（如“翻译浮窗”、“AI 用量看板”）作为独立特性模块存在，彼此互不依赖，单工具异常不得影响其他工具正常运行。
+- **单工具完全解耦 (Strict Feature Isolation)**：每个微工具（如“翻译浮窗”、“实时字幕”、“AI 用量看板”）作为独立特性模块存在，彼此互不依赖，单工具异常不得影响其他工具正常运行。
 - **按需加载与零空闲开销 (Lazy Loading & Zero Idle Cost)**：
   - 未激活的工具禁止在后台占用 CPU 或持有高内存对象。
-  - 用户仅使用翻译功能时，AI 用量模块不得被加载，内存保持在最低基线（约 20~30MB）。
-  - 设置页面切出或窗口关闭时，必须挂起或销毁后台定时刷新任务。
+  - 用户仅使用翻译功能时，AI 用量与实时字幕模块不得被加载，内存保持在最低基线（约 20~30MB）。
+  - 实时字幕条关闭或暂停时，必须立即销毁 `SCStream` 音频采集进程与语音识别会话，释放麦克风/内录资源。
 - **主线程绝对非阻塞 (Never Block MainActor)**：
   - 严禁在主线程执行文件枚举、全量日志解析、子进程创建（如 `codex app-server` / `zsh`）或网络 I/O。
   - 耗时任务一律派发至 `.utility` 或 `.background` QoS 异步后台任务。
@@ -40,7 +40,8 @@ LocalTranslate/
 │   │   │   └── TranslationStyle.swift  # 翻译风格枚举与 Prompt 定义
 │   │   ├── Services/
 │   │   │   ├── OllamaClient.swift      # Ollama /api/chat 流式交互与语言识别
-│   │   │   ├── HotKeyManager.swift     # Carbon 全局热键 (⌥⇧T)
+│   │   │   ├── ScreenshotOCRService.swift # Apple Vision 离线 OCR 与智能段落重组
+│   │   │   ├── HotKeyManager.swift     # Carbon 全局热键 (⌥⇧T, ⌥⇧S, ⌥⇧L)
 │   │   │   └── SelectedTextReader.swift# 屏幕取词 (Accessibility + 剪贴板兜底)
 │   │   ├── ViewModels/
 │   │   │   └── TranslationViewModel.swift # 翻译状态机与输入管理
@@ -48,6 +49,19 @@ LocalTranslate/
 │   │       ├── FloatingPanel.swift     # NSPanel 悬浮窗实现
 │   │       ├── ContentView.swift       # 浮窗主交互界面
 │   │       └── CleanTextScrollView.swift # 无滚动条流式文本容器
+│   │
+│   ├── LiveSubtitles/                  # 实时音视频同传中文字幕模块
+│   │   ├── Models/
+│   │   │   └── SubtitleItem.swift      # 字幕数据模型与源语言枚举
+│   │   ├── Services/
+│   │   │   ├── SystemAudioCaptureService.swift # ScreenCaptureKit 原生系统音频内录
+│   │   │   ├── LiveSpeechRecognizer.swift      # Apple SFSpeechRecognizer 离线端侧 ASR
+│   │   │   └── LiveTranslationService.swift    # 极简电影字幕流式翻译管线
+│   │   ├── ViewModels/
+│   │   │   └── LiveSubtitlesViewModel.swift    # 同传状态机与音频电平
+│   │   └── Views/
+│   │       ├── LiveSubtitlesOverlayPanel.swift # 底部悬浮置顶电影字幕窗
+│   │       └── LiveSubtitlesView.swift         # 电影级磨砂字幕排版与交互控制
 │   │
 │   └── AIUsage/                        # AI 用量监控模块
 │       ├── Models/
@@ -89,9 +103,9 @@ LocalTranslate/
 - **快照即时呈现**：直接从内存及 `UsageDiskCache` 渲染已有快照（渲染耗时 < 1ms，120 FPS 丝滑切换）。
 - **增量缓存保护**：扫描 `~/.grok/sessions` 与 `~/.gemini/antigravity/conversations` 必须严格核对 `fileSize` 与 `mtime`，命中缓存直接跳过磁盘 I/O（耗时 < 0.05ms）。
 
-### 3.4 翻译模块无感体验（防功能漂移）
-- **功能严格守恒**：不对翻译模块随意增删功能，专注打磨流式响应速度、视觉层次、字体排版、代码保护与快捷键体验。
-- **剪贴板保护**：`SelectedTextReader` 使用剪贴板兜底取词后，必须立即无缝恢复用户原本的剪贴板历史数据。
+### 3.4 实时字幕资源释放与无感同传（防资源泄漏漂移）
+- **关闭即销毁**：实时字幕浮窗关闭或用户暂停时，必须立即调用 `stopCapture()` 释放 `SCStream` 资源并停止 `SFSpeechRecognizer`，不得在后台静默录音或空转 CPU。
+- **电影级视觉保护**：字幕条默认采用 `.ultraThinMaterial` 半透明黑色胶囊底色与高对比度白色文字（带暗阴影），确保在任意视频明亮背景下均清晰可读。
 
 ---
 
