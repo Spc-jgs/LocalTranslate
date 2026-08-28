@@ -6,51 +6,20 @@ public final class LiveTranslationService {
     public static let shared = LiveTranslationService()
 
     private var activeTask: Task<Void, Never>?
-    private var pendingWorkItem: DispatchWorkItem?
 
     private init() {}
 
-    /// 翻译实时字幕句子（带 300ms 平滑防抖与毫秒级流式输出）
+    /// 翻译实时字幕句子（即时流式输出，零延迟）
     public func translateSubtitle(
         _ text: String,
         sourceLanguage: SubtitleSourceLanguage,
-        isFinal: Bool = false,
         onPartial: @escaping @MainActor (String) -> Void,
         onCompletion: @escaping @MainActor (String) -> Void
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // 取消之前的待执行防抖任务
-        pendingWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.executeTranslation(
-                trimmed,
-                sourceLanguage: sourceLanguage,
-                onPartial: onPartial,
-                onCompletion: onCompletion
-            )
-        }
-
-        self.pendingWorkItem = workItem
-
-        if isFinal {
-            // 如果是断句最终确定的句子，立即执行翻译，无需等待防抖
-            workItem.perform()
-        } else {
-            // 流式中间片段：320ms 防抖，聚合连续单词
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32, execute: workItem)
-        }
-    }
-
-    private func executeTranslation(
-        _ text: String,
-        sourceLanguage: SubtitleSourceLanguage,
-        onPartial: @escaping @MainActor (String) -> Void,
-        onCompletion: @escaping @MainActor (String) -> Void
-    ) {
+        // 取消上一句正在进行的请求，立即启动最新内容的流式翻译
         activeTask?.cancel()
 
         activeTask = Task { [weak self] in
@@ -68,7 +37,7 @@ public final class LiveTranslationService {
             do {
                 guard let url = URL(string: "\(AppSettings.baseURL)/api/chat") else { return }
 
-                var request = URLRequest(url: url, timeoutInterval: 12)
+                var request = URLRequest(url: url, timeoutInterval: 10)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -76,7 +45,7 @@ public final class LiveTranslationService {
                     "model": AppSettings.model,
                     "messages": [
                         ["role": "system", "content": systemInstruction],
-                        ["role": "user", "content": text]
+                        ["role": "user", "content": trimmed]
                     ],
                     "stream": true,
                     "think": false,
@@ -128,8 +97,6 @@ public final class LiveTranslationService {
     }
 
     public func cancel() {
-        pendingWorkItem?.cancel()
-        pendingWorkItem = nil
         activeTask?.cancel()
         activeTask = nil
     }

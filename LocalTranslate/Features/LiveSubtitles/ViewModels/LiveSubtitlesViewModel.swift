@@ -182,7 +182,6 @@ public final class LiveSubtitlesViewModel: ObservableObject, SystemAudioCaptureD
             self.translationService.translateSubtitle(
                 text,
                 sourceLanguage: self.sourceLanguage,
-                isFinal: isFinal,
                 onPartial: { [weak self] partial in
                     self?.currentTranslatedText = partial
                 },
