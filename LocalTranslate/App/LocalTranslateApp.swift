@@ -336,7 +336,7 @@ final class AppDelegate:
                 self.viewModel.loadSelectedText(recognizedText)
                 self.showPanel(
                     reposition: !self.viewModel.isPinned,
-                    activateApp: false
+                    activateApp: true
                 )
                 self.viewModel.translate()
             } catch {
@@ -392,6 +392,7 @@ final class AppDelegate:
         panel.makeKeyAndOrderFront(
             nil
         )
+        panel.orderFrontRegardless()
     }
 
     // MARK: - Centered Show

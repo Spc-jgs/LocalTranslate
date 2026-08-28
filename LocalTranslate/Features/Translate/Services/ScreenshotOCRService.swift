@@ -16,10 +16,10 @@ final class ScreenshotOCRService {
             try? FileManager.default.removeItem(at: tempFile)
         }
 
-        // 1. 异步调用原生截图 CLI
+        // 1. 异步调用原生截图 CLI（包含短缓冲，确保物理热键释放）
         let success = await runScreenCapture(outputURL: tempFile)
         guard success, FileManager.default.fileExists(atPath: tempFile.path) else {
-            return nil // 用户按 ESC 取消
+            return nil // 用户按 ESC 取消或未生成文件
         }
 
         // 2. 读取物理像素 CGImage
@@ -51,7 +51,10 @@ final class ScreenshotOCRService {
     }
 
     private func runScreenCapture(outputURL: URL) async -> Bool {
-        await withCheckedContinuation { continuation in
+        // 短暂延迟 (120ms)，等待用户的物理热键 (Option + Shift) 释放，避免按键状态干扰 screencapture 初始化
+        try? await Task.sleep(nanoseconds: 120_000_000)
+
+        return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInteractive).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
