@@ -150,13 +150,13 @@ final class HotKeyManager {
             &screenshotHotKeyRef
         )
 
-        // 3. 实时字幕: ⌥⇧L (kVK_ANSI_L = 37, optionKey = 2048, shiftKey = 512)
+        // 3. 实时字幕: ⌥⇧C (kVK_ANSI_C = 8, optionKey = 2048, shiftKey = 512)
         let liveSubtitlesID = EventHotKeyID(
             signature: Self.signature,
             id: 3
         )
         RegisterEventHotKey(
-            UInt32(kVK_ANSI_L),
+            UInt32(kVK_ANSI_C),
             UInt32(optionKey | shiftKey),
             liveSubtitlesID,
             target,

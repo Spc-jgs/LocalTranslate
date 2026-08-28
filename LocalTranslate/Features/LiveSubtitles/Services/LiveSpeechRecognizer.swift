@@ -41,16 +41,14 @@ public final class LiveSpeechRecognizer {
 
         // 申请或检查语音识别授权
         let status = SFSpeechRecognizer.authorizationStatus()
-        guard status == .authorized || status == .notDetermined else {
+        if status == .notDetermined {
+            SFSpeechRecognizer.requestAuthorization { _ in }
+        } else if status == .denied || status == .restricted {
             throw NSError(
                 domain: "LiveSpeechRecognizer",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "语音识别权限未开启，请在系统设置中允许。"]
             )
-        }
-
-        if status == .notDetermined {
-            SFSpeechRecognizer.requestAuthorization { _ in }
         }
 
         startRecognitionSession()
@@ -73,7 +71,7 @@ public final class LiveSpeechRecognizer {
     private func setupRecognizer(for language: SubtitleSourceLanguage) {
         let locale: Locale
         if language == .auto {
-            locale = Locale(identifier: "ja-JP") // 自动时默认首选日语，后续可支持自适应
+            locale = Locale(identifier: "ja-JP") // 自动时默认首选日语
         } else {
             locale = Locale(identifier: language.rawValue)
         }
@@ -87,20 +85,13 @@ public final class LiveSpeechRecognizer {
         setupRecognizer(for: currentLanguage)
 
         guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-            delegate?.liveSpeechRecognizerDidFail(
-                error: NSError(
-                    domain: "LiveSpeechRecognizer",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "当前语言 (\(currentLanguage.displayName)) 的离线语音识别不可用"]
-                )
-            )
+            // 如果某语种离线引擎暂不可用，记录日志并不阻塞主流程
             return
         }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
 
-        // 尽可能使用端侧离线识别
         if recognizer.supportsOnDeviceRecognition {
             request.requiresOnDeviceRecognition = true
         }
@@ -119,16 +110,21 @@ public final class LiveSpeechRecognizer {
                 }
 
                 if result.isFinal {
-                    // 完成一句，自动平滑重启下一个片段会话
                     self.restartSession()
                 }
             }
 
             if let error {
                 let nsError = error as NSError
-                // 忽略被主动取消的正常错误 (216 / 1110)
-                if nsError.code != 216 && nsError.code != 1110 && self.isRunning {
-                    self.delegate?.liveSpeechRecognizerDidFail(error: error)
+                // 忽略正常静默/无声/超时断连错误码 (203: Timeout, 209: No speech, 216: Cancel, 1110: Audio silence)
+                let silentCodes = [203, 209, 216, 1110]
+                if !silentCodes.contains(nsError.code) && self.isRunning {
+                    // 仅真实异常时抛出
+                    if nsError.code != 1700 {
+                        self.delegate?.liveSpeechRecognizerDidFail(error: error)
+                    }
+                }
+                if self.isRunning {
                     self.restartSession()
                 }
             }
@@ -144,7 +140,7 @@ public final class LiveSpeechRecognizer {
     }
 
     private func restartSession() {
-        processingQueue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        processingQueue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self, self.isRunning else { return }
             self.startRecognitionSession()
         }

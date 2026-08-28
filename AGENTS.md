@@ -41,7 +41,7 @@ LocalTranslate/
 │   │   ├── Services/
 │   │   │   ├── OllamaClient.swift      # Ollama /api/chat 流式交互与语言识别
 │   │   │   ├── ScreenshotOCRService.swift # Apple Vision 离线 OCR 与智能段落重组
-│   │   │   ├── HotKeyManager.swift     # Carbon 全局热键 (⌥⇧T, ⌥⇧S, ⌥⇧L)
+│   │   │   ├── HotKeyManager.swift     # Carbon 全局热键 (⌥⇧T, ⌥⇧S, ⌥⇧C)
 │   │   │   └── SelectedTextReader.swift# 屏幕取词 (Accessibility + 剪贴板兜底)
 │   │   ├── ViewModels/
 │   │   │   └── TranslationViewModel.swift # 翻译状态机与输入管理

@@ -53,7 +53,7 @@ private struct MenuBarContent: View {
             )
         }
 
-        Button("实时音视频字幕 (⌥⇧L)") {
+        Button("实时音视频字幕 (⌥⇧C)") {
             NotificationCenter.default.post(
                 name: .triggerLiveSubtitles,
                 object: nil

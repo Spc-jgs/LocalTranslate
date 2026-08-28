@@ -256,6 +256,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LocalTranslate 需要音频权限以捕获电影与视频声音进行同传字幕。";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "LocalTranslate 需要语音识别权限以将视频与电影声音转为文字进行同传字幕。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -286,6 +288,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LocalTranslate 需要音频权限以捕获电影与视频声音进行同传字幕。";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "LocalTranslate 需要语音识别权限以将视频与电影声音转为文字进行同传字幕。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
