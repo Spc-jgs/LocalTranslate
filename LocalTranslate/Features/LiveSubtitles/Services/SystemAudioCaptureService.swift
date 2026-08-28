@@ -55,13 +55,6 @@ public final class SystemAudioCaptureService: NSObject, SCStreamDelegate, SCStre
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.excludesCurrentProcessAudio = true
-        config.sampleRate = 16000
-        config.channelCount = 1
-
-        // 降低视频分辨率以节省 CPU (仅做音频内录)
-        config.width = 2
-        config.height = 2
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
         let newStream = SCStream(filter: filter, configuration: config, delegate: self)
         try newStream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
@@ -112,8 +105,10 @@ public final class SystemAudioCaptureService: NSObject, SCStreamDelegate, SCStre
     // MARK: - Helper
 
     private func sampleBufferToPCMBuffer(sampleBuffer: CMSampleBuffer, formatDescription: CMFormatDescription) -> AVAudioPCMBuffer? {
-        guard var asbd = formatDescription.audioStreamBasicDescription else { return nil }
-        guard let audioFormat = AVAudioFormat(streamDescription: &asbd) else { return nil }
+        guard var asbd = formatDescription.audioStreamBasicDescription,
+              let audioFormat = AVAudioFormat(streamDescription: &asbd) else {
+            return nil
+        }
 
         let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
         guard numSamples > 0 else { return nil }
@@ -123,29 +118,57 @@ public final class SystemAudioCaptureService: NSObject, SCStreamDelegate, SCStre
         }
         pcmBuffer.frameLength = AVAudioFrameCount(numSamples)
 
+        var bufferListSizeNeeded: Int = 0
         var blockBuffer: CMBlockBuffer?
-        var audioBufferList = AudioBufferList()
 
-        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        // 1. 查询所需 AudioBufferList 准确内存大小
+        let queryStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &bufferListSizeNeeded,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: 0,
+            blockBufferOut: nil
+        )
+
+        guard queryStatus == noErr, bufferListSizeNeeded > 0 else { return nil }
+
+        // 2. 动态分配内存提取真实音频流
+        let bufferListPtr = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: bufferListSizeNeeded)
+        defer { bufferListPtr.deallocate() }
+
+        let extractStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
             bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            bufferListOut: bufferListPtr,
+            bufferListSize: bufferListSizeNeeded,
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
             flags: 0,
             blockBufferOut: &blockBuffer
         )
 
-        let bytesToCopy = min(Int(audioBufferList.mBuffers.mDataByteSize), Int(pcmBuffer.frameLength) * Int(audioFormat.streamDescription.pointee.mBytesPerFrame))
-        guard let source = audioBufferList.mBuffers.mData else { return nil }
+        guard extractStatus == noErr else { return nil }
+
+        let audioBufferPointer = UnsafeBufferPointer(
+            start: &bufferListPtr.pointee.mBuffers,
+            count: Int(bufferListPtr.pointee.mNumberBuffers)
+        )
 
         if let floatChannelData = pcmBuffer.floatChannelData {
-            memcpy(floatChannelData[0], source, bytesToCopy)
+            for (index, buffer) in audioBufferPointer.enumerated() {
+                if let source = buffer.mData, index < Int(audioFormat.channelCount) {
+                    memcpy(floatChannelData[index], source, Int(buffer.mDataByteSize))
+                }
+            }
         } else if let int16ChannelData = pcmBuffer.int16ChannelData {
-            memcpy(int16ChannelData[0], source, bytesToCopy)
-        } else {
-            return nil
+            for (index, buffer) in audioBufferPointer.enumerated() {
+                if let source = buffer.mData, index < Int(audioFormat.channelCount) {
+                    memcpy(int16ChannelData[index], source, Int(buffer.mDataByteSize))
+                }
+            }
         }
 
         return pcmBuffer
