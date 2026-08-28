@@ -6,10 +6,20 @@ import Vision
 final class ScreenshotOCRService {
     static let shared = ScreenshotOCRService()
 
+    private var isCapturing = false
+
     private init() {}
 
     /// 调起系统原生交互框选，并对截屏进行精准 Vision OCR 识别与段落重组
     func captureAndRecognizeText() async throws -> String? {
+        guard !isCapturing else {
+            return nil
+        }
+        isCapturing = true
+        defer {
+            isCapturing = false
+        }
+
         // 1. 调起系统原生截图 (参考 Easydict 成熟实现: -i -s -x)
         guard let nsImage = await takeInteractiveScreenshot() else {
             return nil // 用户按 ESC 取消或未截取

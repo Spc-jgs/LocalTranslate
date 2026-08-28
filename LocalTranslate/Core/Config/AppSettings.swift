@@ -11,7 +11,7 @@ enum AppSettings {
     }
 
     static let defaultModel = "qwen3.5:4b"
-    static let defaultBaseURL = "http://localhost:11434"
+    static let defaultBaseURL = "http://127.0.0.1:11434"
     static let defaultKeepAlive = "10m"
     static let defaultTranslationStyleRaw = TranslationStyle.standard.rawValue
     static let defaultCustomPrompt = ""

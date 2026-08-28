@@ -12,6 +12,9 @@ final class HotKeyManager {
     private var translateAction: (() -> Void)?
     private var screenshotAction: (() -> Void)?
 
+    private var lastTranslateTrigger: Date = .distantPast
+    private var lastScreenshotTrigger: Date = .distantPast
+
     func register(
         onTranslate: @escaping () -> Void,
         onScreenshot: @escaping () -> Void
@@ -51,10 +54,17 @@ final class HotKeyManager {
                 )
 
                 if status == noErr {
+                    let now = Date()
                     DispatchQueue.main.async {
                         if hotKeyID.id == 1 {
+                            // 防抖 400ms，忽略长按连击
+                            guard now.timeIntervalSince(manager.lastTranslateTrigger) > 0.4 else { return }
+                            manager.lastTranslateTrigger = now
                             manager.translateAction?()
                         } else if hotKeyID.id == 2 {
+                            // 防抖 600ms，防止截图模式在按键持续期间重复拉起
+                            guard now.timeIntervalSince(manager.lastScreenshotTrigger) > 0.6 else { return }
+                            manager.lastScreenshotTrigger = now
                             manager.screenshotAction?()
                         }
                     }
