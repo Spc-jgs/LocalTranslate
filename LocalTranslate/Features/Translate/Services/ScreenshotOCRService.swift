@@ -10,24 +10,13 @@ final class ScreenshotOCRService {
 
     /// 调起系统原生交互框选，并对截屏进行精准 Vision OCR 识别与段落重组
     func captureAndRecognizeText() async throws -> String? {
-        let tempDir = FileManager.default.temporaryDirectory
-        let tempFile = tempDir.appendingPathComponent("local_translate_ocr_\(UUID().uuidString).png")
-        defer {
-            try? FileManager.default.removeItem(at: tempFile)
+        // 1. 调起系统原生截图 (参考 Easydict 成熟实现: -i -s -x)
+        guard let nsImage = await takeInteractiveScreenshot() else {
+            return nil // 用户按 ESC 取消或未截取
         }
 
-        // 1. 异步调用原生截图 CLI
-        let success = await runScreenCapture(outputURL: tempFile)
-        guard success,
-              FileManager.default.fileExists(atPath: tempFile.path),
-              let fileSize = try? tempFile.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              fileSize > 100 else {
-            return nil // 用户按 ESC 取消或未截取图片
-        }
-
-        // 2. 读取物理像素 CGImage
-        guard let nsImage = NSImage(contentsOf: tempFile),
-              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        // 2. 提取最高物理精度 CGImage
+        guard let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return nil
         }
 
@@ -53,21 +42,37 @@ final class ScreenshotOCRService {
         }.value
     }
 
-    private func runScreenCapture(outputURL: URL) async -> Bool {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInteractive).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                // -i: 交互选框, -x: 静音无快门声
-                process.arguments = ["-i", "-x", outputURL.path]
+    /// 基于系统 screencapture 的非阻塞异步截图 (匹配 Easydict 工业级实现)
+    private func takeInteractiveScreenshot() async -> NSImage? {
+        let fileManager = FileManager.default
+        let temporaryPath = fileManager.temporaryDirectory
+            .appendingPathComponent("ocr_cap_\(UUID().uuidString)")
+            .appendingPathExtension("png")
+            .path
 
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    continuation.resume(returning: true)
-                } catch {
-                    continuation.resume(returning: false)
+        return await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            // -i: 交互选框, -s: 仅选区模式 (防空格切窗口), -x: 静音
+            process.arguments = ["-i", "-s", "-x", temporaryPath]
+
+            process.terminationHandler = { _ in
+                DispatchQueue.main.async {
+                    if fileManager.fileExists(atPath: temporaryPath) {
+                        if let image = NSImage(contentsOfFile: temporaryPath) {
+                            try? fileManager.removeItem(atPath: temporaryPath)
+                            continuation.resume(returning: image)
+                            return
+                        }
+                    }
+                    continuation.resume(returning: nil)
                 }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: nil)
             }
         }
     }
@@ -77,7 +82,6 @@ final class ScreenshotOCRService {
     private nonisolated static func mergeObservationsToParagraphs(_ observations: [VNRecognizedTextObservation]) -> String {
         // 1. 按照屏幕阅读顺序排序（Y轴自上而下，X轴自左向右）
         let sorted = observations.sorted { a, b in
-            // Vision 坐标系原点在左下角，minY 越大代表越靠上
             if abs(a.boundingBox.minY - b.boundingBox.minY) > 0.035 {
                 return a.boundingBox.minY > b.boundingBox.minY
             }
@@ -96,19 +100,16 @@ final class ScreenshotOCRService {
                 let verticalGap = prev.boundingBox.minY - obs.boundingBox.maxY
                 let avgHeight = (prev.boundingBox.height + obs.boundingBox.height) / 2.0
 
-                // 2. 判断是否属于换段落还是行内换行
                 if verticalGap > avgHeight * 0.9 {
                     // 大行距 -> 新段落
                     result += "\n\n"
                 } else {
-                    // 行距紧密 -> 判断是否为代码/项目符号列表/中英文拼接
                     let prevTrimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
                     let isPrevEndsWithHyphen = prevTrimmed.hasSuffix("-")
                     let isPrevChinese = isChinese(prevTrimmed.last)
                     let isCurrChinese = isChinese(text.first)
 
                     if isPrevEndsWithHyphen {
-                        // 英文连字符换行 (如 "imple-\nmentation" -> "implementation")
                         result.removeLast()
                     } else if isPrevChinese || isCurrChinese {
                         // 中文字符换行无缝拼接
