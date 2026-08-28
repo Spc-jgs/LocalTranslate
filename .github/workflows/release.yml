@@ -16,9 +16,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Select Xcode
+      - name: Select Latest Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          for xcode in /Applications/Xcode_16.2.app /Applications/Xcode_16.1.app /Applications/Xcode_16.app /Applications/Xcode.app; do
+            if [ -d "$xcode" ]; then
+              echo "Selecting $xcode"
+              sudo xcode-select -s "$xcode/Contents/Developer"
+              break
+            fi
+          done
           xcodebuild -version
 
       - name: Build Release App
