@@ -1,5 +1,6 @@
 import Foundation
 import Carbon.HIToolbox
+import AppKit
 
 final class HotKeyManager {
 
@@ -12,8 +13,9 @@ final class HotKeyManager {
     private var translateAction: (() -> Void)?
     private var screenshotAction: (() -> Void)?
 
-    private var lastTranslateTrigger: Date = .distantPast
-    private var lastScreenshotTrigger: Date = .distantPast
+    private var lastTranslateTimestamp: TimeInterval = 0
+    private var lastScreenshotTimestamp: TimeInterval = 0
+    private let lock = NSLock()
 
     func register(
         onTranslate: @escaping () -> Void,
@@ -22,19 +24,32 @@ final class HotKeyManager {
         self.translateAction = onTranslate
         self.screenshotAction = onScreenshot
 
+        guard let target = GetEventDispatcherTarget() else {
+            return
+        }
+
         let eventSpecs = [
             EventTypeSpec(
                 eventClass: OSType(kEventClassKeyboard),
                 eventKind: UInt32(kEventHotKeyPressed)
+            ),
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyReleased)
             )
         ]
 
         let pointer = Unmanaged.passUnretained(self).toOpaque()
 
-        let installStatus = InstallEventHandler(
-            GetApplicationEventTarget(),
+        InstallEventHandler(
+            target,
             { _, inEvent, userData in
-                guard let userData, let inEvent else {
+                guard let inEvent, let userData else {
+                    return noErr
+                }
+
+                // 仅响应按键按下事件 (忽略释放事件，但必须监听以保证 Carbon 状态机正常)
+                guard GetEventKind(inEvent) == UInt32(kEventHotKeyPressed) else {
                     return noErr
                 }
 
@@ -53,20 +68,34 @@ final class HotKeyManager {
                     &hotKeyID
                 )
 
-                if status == noErr {
-                    let now = Date()
+                guard status == noErr, hotKeyID.signature == HotKeyManager.signature else {
+                    return noErr
+                }
+
+                let now = ProcessInfo.processInfo.systemUptime
+
+                manager.lock.lock()
+                defer { manager.lock.unlock() }
+
+                if hotKeyID.id == 1 {
+                    // 划词翻译防抖 400ms
+                    guard now - manager.lastTranslateTimestamp > 0.4 else {
+                        return noErr
+                    }
+                    manager.lastTranslateTimestamp = now
+
                     DispatchQueue.main.async {
-                        if hotKeyID.id == 1 {
-                            // 防抖 400ms，忽略长按连击
-                            guard now.timeIntervalSince(manager.lastTranslateTrigger) > 0.4 else { return }
-                            manager.lastTranslateTrigger = now
-                            manager.translateAction?()
-                        } else if hotKeyID.id == 2 {
-                            // 防抖 600ms，防止截图模式在按键持续期间重复拉起
-                            guard now.timeIntervalSince(manager.lastScreenshotTrigger) > 0.6 else { return }
-                            manager.lastScreenshotTrigger = now
-                            manager.screenshotAction?()
-                        }
+                        manager.translateAction?()
+                    }
+                } else if hotKeyID.id == 2 {
+                    // 截图翻译防抖 600ms (严格在 Carbon 线程同步过滤重复连击)
+                    guard now - manager.lastScreenshotTimestamp > 0.6 else {
+                        return noErr
+                    }
+                    manager.lastScreenshotTimestamp = now
+
+                    DispatchQueue.main.async {
+                        manager.screenshotAction?()
                     }
                 }
 
@@ -78,8 +107,6 @@ final class HotKeyManager {
             &eventHandlerRef
         )
 
-        _ = installStatus
-
         // 1. 划词/剪贴板翻译: ⌥⇧T (kVK_ANSI_T = 17, optionKey = 2048, shiftKey = 512)
         let translateID = EventHotKeyID(
             signature: Self.signature,
@@ -89,7 +116,7 @@ final class HotKeyManager {
             UInt32(kVK_ANSI_T),
             UInt32(optionKey | shiftKey),
             translateID,
-            GetApplicationEventTarget(),
+            target,
             0,
             &translateHotKeyRef
         )
@@ -103,7 +130,7 @@ final class HotKeyManager {
             UInt32(kVK_ANSI_S),
             UInt32(optionKey | shiftKey),
             screenshotID,
-            GetApplicationEventTarget(),
+            target,
             0,
             &screenshotHotKeyRef
         )
