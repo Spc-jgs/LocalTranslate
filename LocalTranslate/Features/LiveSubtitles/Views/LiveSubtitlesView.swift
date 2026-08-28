@@ -219,7 +219,6 @@ public struct LiveSubtitlesView: View {
                             .shadow(color: .black.opacity(0.85), radius: 2, x: 0, y: 1)
                     }
                 }
-                .transition(.opacity)
             } else if viewModel.isRunning {
                 // 等待声音输入状态
                 VStack(spacing: 3) {
@@ -250,7 +249,6 @@ public struct LiveSubtitlesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .animation(.easeInOut(duration: 0.2), value: viewModel.currentTranslatedText)
         .animation(.easeInOut(duration: 0.25), value: viewModel.previousItem)
     }
 
