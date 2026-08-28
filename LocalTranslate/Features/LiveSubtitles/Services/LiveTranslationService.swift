@@ -6,11 +6,10 @@ public final class LiveTranslationService {
     public static let shared = LiveTranslationService()
 
     private var activeTask: Task<Void, Never>?
-    private var lastRequestedText: String = ""
 
     private init() {}
 
-    /// 翻译实时字幕句子（支持流式逐步输出）
+    /// 翻译实时字幕句子（毫秒级流式输出）
     public func translateSubtitle(
         _ text: String,
         sourceLanguage: SubtitleSourceLanguage,
@@ -26,31 +25,74 @@ public final class LiveTranslationService {
         activeTask = Task { [weak self] in
             guard let self else { return }
 
-            let customPrompt = """
-            【实时电影字幕翻译模式】
-            你现在是一名专业影视字幕同传翻译员。
-            请将输入的影视台词翻译成地道、简练、生动的简体中文字幕。
+            let systemInstruction = """
+            你是一名实时影视字幕同传翻译员。
+            任务：将外语（英文/日文/韩文等）台词翻译成自然通顺、简练地道的简体中文字幕。
             规则：
-            1. 译文必须极简短、符合中文母语者口语听感，不得啰嗦拖沓。
-            2. 严禁输出任何解释、注释、拼音、假名或前后缀，仅输出最终中文字幕。
-            3. 如果输入本身已经是中文，则保持原样或进行极微小的口语修饰。
+            1. 严禁输出任何思考过程、解释、拼音、假名、问答或标记。
+            2. 仅输出最终的中文字幕译文。
+            3. 如果输入本身已经是中文，则保持原样。
             """
 
             do {
-                let result = try await OllamaClient.shared.translateStream(
-                    trimmed,
-                    style: .custom,
-                    customPrompt: customPrompt
-                ) { partial in
-                    guard !Task.isCancelled else { return }
-                    onPartial(partial)
+                guard let url = URL(string: "\(AppSettings.baseURL)/api/chat") else { return }
+
+                var request = URLRequest(url: url, timeoutInterval: 10)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+                let payload: [String: Any] = [
+                    "model": AppSettings.model,
+                    "messages": [
+                        ["role": "system", "content": systemInstruction],
+                        ["role": "user", "content": trimmed]
+                    ],
+                    "stream": true,
+                    "think": false,
+                    "options": [
+                        "temperature": 0.2,
+                        "num_predict": 128
+                    ],
+                    "keep_alive": AppSettings.keepAlive
+                ]
+
+                request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    return
                 }
 
-                guard !Task.isCancelled else { return }
-                onCompletion(result)
+                var fullTranslation = ""
+
+                for try await line in bytes.lines {
+                    guard !Task.isCancelled else { break }
+
+                    let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedLine.isEmpty, let data = trimmedLine.data(using: .utf8) else { continue }
+
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let message = json["message"] as? [String: Any],
+                       let content = message["content"] as? String,
+                       !content.isEmpty {
+
+                        // 过滤可能夹带的 <think> 标签
+                        let cleaned = content.replacingOccurrences(of: "<think>", with: "")
+                                             .replacingOccurrences(of: "</think>", with: "")
+
+                        fullTranslation += cleaned
+                        onPartial(fullTranslation.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                }
+
+                let finalClean = fullTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !Task.isCancelled && !finalClean.isEmpty {
+                    onCompletion(finalClean)
+                }
             } catch {
-                guard !Task.isCancelled else { return }
-                // 异常时若已有部分文本则保留，否则兜底展示简易状态
+                // 静默忽略取消异常
             }
         }
     }
