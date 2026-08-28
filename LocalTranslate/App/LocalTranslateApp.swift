@@ -324,6 +324,8 @@ final class AppDelegate:
             panel.orderOut(nil)
         }
 
+        NSApp.activate(ignoringOtherApps: true)
+
         Task { @MainActor [weak self] in
             guard let self else { return }
 
