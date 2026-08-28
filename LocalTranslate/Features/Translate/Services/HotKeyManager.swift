@@ -24,11 +24,10 @@ final class HotKeyManager {
 
         let pointer = Unmanaged.passUnretained(self).toOpaque()
 
-        // 使用 GetEventDispatcherTarget 保证在应用处于后台或 Accessory 模式时仍能全局捕获热键
-        let target = GetEventDispatcherTarget() ?? GetApplicationEventTarget()
+        let appTarget = GetApplicationEventTarget()
 
         InstallEventHandler(
-            target,
+            appTarget,
             { _, inEvent, userData in
                 guard let userData, let inEvent else {
                     return noErr
@@ -78,7 +77,7 @@ final class HotKeyManager {
             UInt32(kVK_ANSI_T),
             UInt32(optionKey | shiftKey),
             translateID,
-            target,
+            appTarget,
             0,
             &translateHotKeyRef
         )
@@ -92,7 +91,7 @@ final class HotKeyManager {
             UInt32(kVK_ANSI_S),
             UInt32(optionKey | shiftKey),
             screenshotID,
-            target,
+            appTarget,
             0,
             &screenshotHotKeyRef
         )
