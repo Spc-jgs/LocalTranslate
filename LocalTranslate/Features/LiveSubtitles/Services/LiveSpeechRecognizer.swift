@@ -3,7 +3,7 @@ import Foundation
 @preconcurrency import AVFoundation
 
 public protocol LiveSpeechRecognizerDelegate: AnyObject {
-    nonisolated func liveSpeechRecognizerDidRecognize(text: String, isFinal: Bool)
+    nonisolated func liveSpeechRecognizerDidRecognize(update: LiveSpeechRecognitionUpdate)
     nonisolated func liveSpeechRecognizerDidFail(error: Error)
 }
 
@@ -18,18 +18,16 @@ public final class LiveSpeechRecognizer: @unchecked Sendable {
             guard let self else { return }
 
             switch event {
-            case let .transcription(text, isFinal):
-                self.delegate?.liveSpeechRecognizerDidRecognize(text: text, isFinal: isFinal)
+            case let .transcription(update):
+                self.delegate?.liveSpeechRecognizerDidRecognize(update: update)
             case let .failure(error):
                 self.delegate?.liveSpeechRecognizerDidFail(error: error)
             }
         }
     }
 
-    public nonisolated func setLanguage(_ language: SubtitleSourceLanguage) {
-        Task(priority: .userInitiated) {
-            await engine.setLanguage(language)
-        }
+    public nonisolated func setLanguage(_ language: SubtitleSourceLanguage) async {
+        await engine.setLanguage(language)
     }
 
     public nonisolated func start() async throws {
@@ -50,7 +48,7 @@ public final class LiveSpeechRecognizer: @unchecked Sendable {
 private actor RecognitionEngine {
 
     enum Event: @unchecked Sendable {
-        case transcription(text: String, isFinal: Bool)
+        case transcription(update: LiveSpeechRecognitionUpdate)
         case failure(error: Error)
     }
 
@@ -62,7 +60,7 @@ private actor RecognitionEngine {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analysisTask: Task<Void, Never>?
     private var resultsTask: Task<Void, Never>?
-    private var currentTranscript = AttributedString()
+    private var transcriptState = LiveSpeechRecognitionState()
 
     private var analyzerFormat: AVAudioFormat?
     private var audioConverter: AVAudioConverter?
@@ -157,7 +155,7 @@ private actor RecognitionEngine {
         self.analyzer = analyzer
         self.analyzerFormat = format
         self.inputContinuation = continuation
-        self.currentTranscript = AttributedString()
+        self.transcriptState.reset()
         self.isRunning = true
 
         self.resultsTask = Task { [weak self] in
@@ -201,7 +199,7 @@ private actor RecognitionEngine {
         analyzerFormat = nil
         audioConverter = nil
         converterInputFormat = nil
-        currentTranscript = AttributedString()
+        transcriptState.reset()
 
         await SpeechModels.endRetention()
     }
@@ -271,34 +269,32 @@ private actor RecognitionEngine {
             && lhs.isInterleaved == rhs.isInterleaved
     }
 
-    private func emitTranscription(_ text: String, isFinal: Bool) {
+    private func emitTranscription(_ update: LiveSpeechRecognitionUpdate) {
         guard isRunning else { return }
-        eventHandler(.transcription(text: text, isFinal: isFinal))
+        eventHandler(.transcription(update: update))
     }
 
     private func consume(_ result: SpeechTranscriber.Result) {
         guard isRunning else { return }
 
-        // Progressive results revise an audio time range; they are not complete
-        // replacement strings. Merge by time range as required by SpeechTranscriber.
-        if let rangeToReplace = currentTranscript
-            .rangeOfAudioTimeRangeAttributes(intersecting: result.range) {
-            currentTranscript.replaceSubrange(rangeToReplace, with: result.text)
-        } else {
-            currentTranscript.append(result.text)
-        }
+        // A volatile result replaces the current audio phrase. Only a framework
+        // final result produces an append-only committed delta.
+        let update = transcriptState.consume(
+            text: String(result.text.characters),
+            isFinal: result.isFinal
+        )
+        trace(result)
+        emitTranscription(update)
+    }
 
-        let text = String(currentTranscript.characters)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-
-        emitTranscription(text, isFinal: result.isFinal)
-
-        // A finalized range won't be revised again. Start a fresh caption window
-        // so a long-running session doesn't repeatedly resend old dialogue.
-        if result.isFinal {
-            currentTranscript = AttributedString()
-        }
+    private func trace(_ result: SpeechTranscriber.Result) {
+        #if DEBUG
+        let textHash = String(result.text.characters).hashValue
+        print(
+            "[LiveASR] range=\(result.range) final=\(result.isFinal) "
+                + "finalizedThrough=\(result.resultsFinalizationTime) hash=\(textHash)"
+        )
+        #endif
     }
 
     private func emitFailureIfRunning(_ error: Error) {

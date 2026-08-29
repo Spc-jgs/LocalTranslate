@@ -53,81 +53,111 @@ public final class LiveTranslationService {
     }
 
     private struct PreviewJob {
+        let key: LiveTranslationRequestKey
         let sourceText: String
+        let context: [SubtitleItem]
         let sourceLanguage: SubtitleSourceLanguage
-        let onPartial: @MainActor (String) -> Void
+        let completion: @MainActor (LiveTranslationRequestKey, String) -> Void
     }
 
     private struct FinalJob {
+        let key: LiveTranslationRequestKey
         let sourceText: String
+        let context: [SubtitleItem]
         let sourceLanguage: SubtitleSourceLanguage
-        let completion: @MainActor (String) -> Void
+        let onPartial: @MainActor (LiveTranslationRequestKey, String) -> Void
+        let completion: @MainActor (LiveTranslationRequestKey, String) -> Void
     }
 
     private var pendingPreview: PreviewJob?
     private var previewWorkerTask: Task<Void, Never>?
     private var finalWorkerTask: Task<Void, Never>?
     private var finalQueue: [FinalJob] = []
+    private var previewGeneration = 0
+    private var finalGeneration = 0
 
     private init() {}
 
-    /// Keep one request in flight and coalesce subsequent ASR revisions into the
-    /// latest pending snapshot. Continuous speech therefore cannot starve the model.
+    /// Keep one request in flight and coalesce subsequent semantic-ready ASR
+    /// revisions into the latest pending snapshot. Preview is published only
+    /// after a complete response, so the UI swaps atomically instead of exposing
+    /// token-by-token rewrites of an unstable source phrase.
     public func translatePreview(
+        key: LiveTranslationRequestKey,
         _ text: String,
+        context: [SubtitleItem] = [],
         sourceLanguage: SubtitleSourceLanguage,
-        onPartial: @escaping @MainActor (String) -> Void
+        onCompletion: @escaping @MainActor (LiveTranslationRequestKey, String) -> Void
     ) {
+        guard key.kind == .preview else { return }
+
         let sourceText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sourceText.isEmpty else { return }
 
         guard sourceLanguage.needsTranslationToSimplifiedChinese else {
-            onPartial(sourceText)
+            onCompletion(key, sourceText)
             return
         }
 
         pendingPreview = PreviewJob(
+            key: key,
             sourceText: sourceText,
+            context: context,
             sourceLanguage: sourceLanguage,
-            onPartial: onPartial
+            completion: onCompletion
         )
+        trace("preview-enqueued", key: key)
         startPreviewWorkerIfNeeded()
     }
 
     public func enqueueFinal(
+        key: LiveTranslationRequestKey,
         _ text: String,
+        context: [SubtitleItem] = [],
         sourceLanguage: SubtitleSourceLanguage,
-        onCompletion: @escaping @MainActor (String) -> Void
+        onPartial: @escaping @MainActor (LiveTranslationRequestKey, String) -> Void,
+        onCompletion: @escaping @MainActor (LiveTranslationRequestKey, String) -> Void
     ) {
+        guard key.kind == .final else { return }
+
         let sourceText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sourceText.isEmpty else { return }
 
-        pendingPreview = nil
-        previewWorkerTask?.cancel()
-        previewWorkerTask = nil
-
         guard sourceLanguage.needsTranslationToSimplifiedChinese else {
-            onCompletion(sourceText)
+            onCompletion(key, sourceText)
             return
         }
 
         finalQueue.append(
             FinalJob(
+                key: key,
                 sourceText: sourceText,
+                context: context,
                 sourceLanguage: sourceLanguage,
+                onPartial: onPartial,
                 completion: onCompletion
             )
         )
+        trace("final-enqueued", key: key)
         startFinalWorkerIfNeeded()
     }
 
-    public func cancel(unloadModel: Bool = true) {
+    public func cancelPreview() {
+        if let key = pendingPreview?.key {
+            trace("preview-cancelled", key: key)
+        }
+        previewGeneration += 1
         pendingPreview = nil
+        previewWorkerTask?.cancel()
+        previewWorkerTask = nil
+    }
+
+    public func cancel(unloadModel: Bool = true) {
+        cancelPreview()
+        finalGeneration += 1
         finalQueue.removeAll(keepingCapacity: false)
 
-        previewWorkerTask?.cancel()
         finalWorkerTask?.cancel()
-        previewWorkerTask = nil
         finalWorkerTask = nil
 
         guard unloadModel else { return }
@@ -140,91 +170,147 @@ public final class LiveTranslationService {
     }
 
     private func startPreviewWorkerIfNeeded() {
-        guard previewWorkerTask == nil, finalWorkerTask == nil else { return }
+        guard previewWorkerTask == nil else { return }
 
+        let generation = previewGeneration
         previewWorkerTask = Task { [weak self] in
-            await self?.drainPreview()
+            await self?.drainPreview(generation: generation)
         }
     }
 
-    private func drainPreview() async {
-        defer { previewWorkerTask = nil }
-
-        // Collect the first few ASR revisions without canceling the worker.
-        do {
-            try await Task.sleep(for: .milliseconds(280))
-        } catch {
-            return
+    private func drainPreview(generation: Int) async {
+        defer {
+            if previewGeneration == generation {
+                previewWorkerTask = nil
+            }
         }
 
-        while !Task.isCancelled, let job = pendingPreview {
+        while !Task.isCancelled,
+              previewGeneration == generation,
+              let job = pendingPreview {
             pendingPreview = nil
+            trace("preview-started", key: job.key)
+            var didTraceFirstToken = false
+            let translatedText: String
 
             do {
-                _ = try await streamTranslation(
+                translatedText = try await streamTranslation(
                     job.sourceText,
+                    context: job.context,
                     sourceLanguage: job.sourceLanguage,
-                    onPartial: job.onPartial
+                    onPartial: { translatedText in
+                        if !didTraceFirstToken {
+                            didTraceFirstToken = true
+                            self.trace("preview-first-token", key: job.key)
+                        }
+                    }
                 )
             } catch is CancellationError {
                 return
             } catch {
-                guard !Task.isCancelled else { return }
-                job.onPartial(job.sourceText)
+                guard !Task.isCancelled,
+                      previewGeneration == generation else { return }
+                job.completion(job.key, "")
+                continue
             }
+
+            guard !Task.isCancelled,
+                  previewGeneration == generation else { return }
+            job.completion(job.key, translatedText)
+            trace("preview-completed", key: job.key)
         }
     }
 
     private func startFinalWorkerIfNeeded() {
         guard finalWorkerTask == nil else { return }
 
+        let generation = finalGeneration
         finalWorkerTask = Task { [weak self] in
-            await self?.drainFinalQueue()
+            await self?.drainFinalQueue(generation: generation)
         }
     }
 
-    private func drainFinalQueue() async {
+    private func drainFinalQueue(generation: Int) async {
         defer {
-            finalWorkerTask = nil
-            startPreviewWorkerIfNeeded()
+            if finalGeneration == generation {
+                finalWorkerTask = nil
+            }
         }
 
-        while !Task.isCancelled, !finalQueue.isEmpty {
+        while !Task.isCancelled,
+              finalGeneration == generation,
+              !finalQueue.isEmpty {
             let job = finalQueue.removeFirst()
             let translatedText: String
+            trace("final-started", key: job.key)
 
             do {
                 translatedText = try await streamTranslation(
                     job.sourceText,
+                    context: job.context,
                     sourceLanguage: job.sourceLanguage,
-                    onPartial: { _ in }
+                    onPartial: { translatedText in
+                        job.onPartial(job.key, translatedText)
+                    }
                 )
             } catch is CancellationError {
                 return
             } catch {
-                translatedText = job.sourceText
+                translatedText = ""
             }
 
-            guard !Task.isCancelled else { return }
-            job.completion(translatedText.isEmpty ? job.sourceText : translatedText)
+            guard !Task.isCancelled,
+                  finalGeneration == generation else { return }
+            job.completion(
+                job.key,
+                translatedText
+            )
+            trace("final-completed", key: job.key)
         }
+    }
+
+    private func trace(
+        _ event: String,
+        key: LiveTranslationRequestKey
+    ) {
+        #if DEBUG
+        print(
+            "[LiveTranslation] event=\(event) kind=\(key.kind) "
+                + "segment=\(key.segmentID) revision=\(key.revision)"
+        )
+        #endif
     }
 
     private func streamTranslation(
         _ sourceText: String,
+        context: [SubtitleItem] = [],
         sourceLanguage: SubtitleSourceLanguage,
         onPartial: @escaping @MainActor (String) -> Void
     ) async throws -> String {
         let url = try makeURL(path: "/api/chat")
+
+        var messages: [ChatRequest.Message] = [
+            .init(role: "system", content: systemPrompt(for: sourceLanguage))
+        ]
+
+        // 注入前序对话历史（全局上下文）
+        for item in context.suffix(2) {
+            let orig = item.originalText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trans = item.translatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !orig.isEmpty && !trans.isEmpty {
+                messages.append(.init(role: "user", content: orig))
+                messages.append(.init(role: "assistant", content: trans))
+            }
+        }
+
+        messages.append(.init(role: "user", content: sourceText))
+
         let requestBody = ChatRequest(
             model: AppSettings.model,
-            messages: [
-                .init(role: "system", content: systemPrompt(for: sourceLanguage)),
-                .init(role: "user", content: sourceText)
-            ],
+            messages: messages,
             stream: true,
             think: false,
-            options: .init(temperature: 0.15, numPredict: 160),
+            options: .init(temperature: 0.15, numPredict: 140),
             keepAlive: AppSettings.keepAlive
         )
 
@@ -290,19 +376,38 @@ public final class LiveTranslationService {
 
     private func systemPrompt(for sourceLanguage: SubtitleSourceLanguage) -> String {
         """
-        你是一名专业实时中文字幕翻译员。
-        将下面的\(sourceLanguage.shortName)语音转写翻译成自然、准确、简练的简体中文。
-        结合完整短句理解语义，不要逐词硬译；保留人名、产品名和技术标识符。
-        原文可能仍在口语表达中，遇到不完整句时只翻译已有内容，不补写事实。
-        只输出译文，不输出解释、思考过程、标签、引号或前后缀。
+        你是一名专业实时影视字幕同传翻译。
+        请将输入的\(sourceLanguage.shortName)语音字幕翻译为简练、通顺的简体中文。
+        要求：
+        1. 严格只输出纯中文译文，严禁输出“注：”、“注意：”、括号解释、任何前言后语或思考过程。
+        2. 若输入为短语或未说完口语，直接顺畅直译已有内容，严禁拒绝或解释。
+        3. 保持人名、代码和技术专有名词前后一致。
         """
     }
 
     private func cleanModelOutput(_ text: String) -> String {
-        text
+        var cleaned = text
             .replacingOccurrences(of: "<think>", with: "")
             .replacingOccurrences(of: "</think>", with: "")
+
+        // 强力过滤任何形如（注：...）或 (Note: ...) 的大模型免责/补充声明
+        cleaned = cleaned.replacingOccurrences(
+            of: #"\s*[\(（\[【](?:注|注意|Note|说明).*?[\)）\]】]"#,
+            with: "",
+            options: .regularExpression
+        )
+        cleaned = cleaned.replacingOccurrences(
+            of: #"\s*[\(（\[【](?:注|注意|Note|说明).*$"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        cleaned = cleaned
+            .replacingOccurrences(of: "……", with: "，")
+            .replacingOccurrences(of: "...", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return cleaned
     }
 
     private nonisolated static func unloadModel(_ model: String, baseURL: String) async {

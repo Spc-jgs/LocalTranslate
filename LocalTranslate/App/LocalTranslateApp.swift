@@ -46,6 +46,13 @@ private struct MenuBarContent: View {
             )
         }
 
+        Button("划词气泡 (⌥⇧D)") {
+            NotificationCenter.default.post(
+                name: .triggerMiniHUD,
+                object: nil
+            )
+        }
+
         Button("截图翻译 (⌥⇧S)") {
             NotificationCenter.default.post(
                 name: .triggerScreenshotOCR,
@@ -135,6 +142,9 @@ final class AppDelegate:
     private var panel:
         FloatingPanel?
 
+    private var miniHUDPanel:
+        MiniHUDPanel?
+
     private var hotKeyManager:
         HotKeyManager?
 
@@ -143,6 +153,9 @@ final class AppDelegate:
 
     private let viewModel =
         TranslationViewModel()
+
+    private let miniHUDViewModel =
+        MiniHUDViewModel()
 
     private var lastPanelHeight:
         CGFloat = 390
@@ -174,10 +187,29 @@ final class AppDelegate:
         self.panel =
             panel
 
+        let miniHUD =
+            MiniHUDPanel(
+                content:
+                    MiniHUDView(
+                        viewModel:
+                            miniHUDViewModel,
+                        onExpand: { [weak self] in
+                            self?.expandMiniHUDToMainPanel()
+                        },
+                        onClose: { [weak self] in
+                            self?.miniHUDPanel?.orderOut(nil)
+                        }
+                    )
+            )
+
+        self.miniHUDPanel =
+            miniHUD
+
         lastPanelHeight =
             390
 
         observeContentSize()
+        observeMiniHUDContentSize()
         observePinState()
 
         let hotKeyManager =
@@ -192,6 +224,9 @@ final class AppDelegate:
             },
             onLiveSubtitles: { [weak self] in
                 self?.handleLiveSubtitlesHotKey()
+            },
+            onMiniHUD: { [weak self] in
+                self?.handleMiniHUDHotKey()
             }
         )
 
@@ -243,6 +278,18 @@ final class AppDelegate:
                     ),
                 name:
                     .triggerLiveSubtitles,
+                object: nil
+            )
+
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector:
+                    #selector(
+                        handleMiniHUDNotification
+                    ),
+                name:
+                    .triggerMiniHUD,
                 object: nil
             )
     }
@@ -384,6 +431,11 @@ final class AppDelegate:
         handleLiveSubtitlesHotKey()
     }
 
+    @objc
+    private func handleMiniHUDNotification(_ notification: Notification) {
+        handleMiniHUDHotKey()
+    }
+
     // MARK: - Live Subtitles HotKey
 
     private func handleLiveSubtitlesHotKey() {
@@ -398,6 +450,56 @@ final class AppDelegate:
             overlay.makeKeyAndOrderFront(nil)
             overlay.orderFrontRegardless()
             vm.start()
+        }
+    }
+
+    // MARK: - Mini HUD HotKey
+
+    private func handleMiniHUDHotKey() {
+        guard SelectedTextReader.isTrusted(promptIfNeeded: true) else {
+            return
+        }
+
+        if let selectedText = SelectedTextReader.read(),
+           !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showMiniHUD(with: selectedText)
+            return
+        }
+
+        // 若无选中文本，回退至主面板
+        handleTranslateHotKey()
+    }
+
+    private func showMiniHUD(with text: String) {
+        guard let miniHUDPanel else { return }
+
+        // 若主面板打开且未钉住，先隐藏主面板
+        if let panel, panel.isVisible, !viewModel.isPinned {
+            panel.orderOut(nil)
+        }
+
+        miniHUDViewModel.loadAndTranslate(text)
+        miniHUDPanel.positionNearMouse()
+        miniHUDPanel.markDisplayed()
+        miniHUDPanel.makeKeyAndOrderFront(nil)
+        miniHUDPanel.orderFrontRegardless()
+    }
+
+    private func expandMiniHUDToMainPanel() {
+        let currentOriginal = miniHUDViewModel.originalText
+        let currentTranslated = miniHUDViewModel.translatedText
+
+        miniHUDViewModel.reset()
+        miniHUDPanel?.orderOut(nil)
+
+        viewModel.loadSelectedText(currentOriginal)
+        if !currentTranslated.isEmpty {
+            viewModel.translatedText = currentTranslated
+        }
+
+        showPanel(reposition: !viewModel.isPinned, activateApp: true)
+        if currentTranslated.isEmpty {
+            viewModel.translate()
         }
     }
 
@@ -780,6 +882,53 @@ final class AppDelegate:
             )
     }
 
+    private func observeMiniHUDContentSize() {
+        Publishers
+            .CombineLatest3(
+                miniHUDViewModel.$originalText,
+                miniHUDViewModel.$translatedText,
+                miniHUDViewModel.$isTranslating
+            )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] original, translated, loading in
+                self?.updateMiniHUDSize(
+                    original: original,
+                    translated: translated,
+                    loading: loading
+                )
+            }
+            .store(in: &cancellables)
+    }
+
+    private func updateMiniHUDSize(
+        original: String,
+        translated: String,
+        loading: Bool
+    ) {
+        guard let miniHUDPanel, miniHUDPanel.isVisible else {
+            return
+        }
+
+        var height: CGFloat = 36 + 32 + 24 // header + footer + vertical margins
+
+        if !original.isEmpty {
+            let origLines = min(estimatedLines(for: original, charactersPerLine: 40), 2)
+            height += CGFloat(origLines) * 16 + 18
+        }
+
+        if loading && translated.isEmpty {
+            height += 46
+        } else if !translated.isEmpty {
+            let lines = estimatedLines(for: translated, charactersPerLine: 28)
+            let textHeight = min(max(CGFloat(lines) * 23 + 12, 44), 320)
+            height += textHeight
+        } else {
+            height += 46
+        }
+
+        miniHUDPanel.updateHeight(min(max(height, 140), 450), animated: false)
+    }
+
     private func updatePanelSize(
         original: String,
         translated: String,
@@ -1132,5 +1281,10 @@ extension Notification.Name {
     static let triggerLiveSubtitles =
         Notification.Name(
             "triggerLiveSubtitles"
+        )
+
+    static let triggerMiniHUD =
+        Notification.Name(
+            "triggerMiniHUD"
         )
 }

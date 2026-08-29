@@ -6,7 +6,7 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
     public static let shared = LiveSubtitlesOverlayPanel()
 
     private init() {
-        let size = NSSize(width: 700, height: 140)
+        let size = NSSize(width: 1180, height: 170)
 
         let hostingView = NSHostingView(
             rootView: LiveSubtitlesView()
@@ -29,7 +29,7 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
         self.isFloatingPanel = true
         self.backgroundColor = .clear
         self.isOpaque = false
-        self.hasShadow = true
+        self.hasShadow = false
         self.isMovableByWindowBackground = true
         self.isReleasedWhenClosed = false
         self.hidesOnDeactivate = false

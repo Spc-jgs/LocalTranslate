@@ -41,13 +41,16 @@ LocalTranslate/
 │   │   ├── Services/
 │   │   │   ├── OllamaClient.swift      # Ollama /api/chat 流式交互与语言识别
 │   │   │   ├── ScreenshotOCRService.swift # Apple Vision 离线 OCR 与智能段落重组
-│   │   │   ├── HotKeyManager.swift     # Carbon 全局热键 (⌥⇧T, ⌥⇧S, ⌥⇧C)
+│   │   │   ├── HotKeyManager.swift     # Carbon 全局热键 (⌥⇧T, ⌥⇧S, ⌥⇧C, ⌥⇧D)
 │   │   │   └── SelectedTextReader.swift# 屏幕取词 (Accessibility + 剪贴板兜底)
 │   │   ├── ViewModels/
-│   │   │   └── TranslationViewModel.swift # 翻译状态机与输入管理
+│   │   │   ├── TranslationViewModel.swift # 翻译状态机与输入管理
+│   │   │   └── MiniHUDViewModel.swift     # 划词气泡轻量状态机与流式管理
 │   │   └── Views/
-│   │       ├── FloatingPanel.swift     # NSPanel 悬浮窗实现
+│   │       ├── FloatingPanel.swift     # NSPanel 悬浮主窗实现
 │   │       ├── ContentView.swift       # 浮窗主交互界面
+│   │       ├── MiniHUDPanel.swift      # 鼠标就近轻量气泡 Panel 实现
+│   │       ├── MiniHUDView.swift       # 划词微气泡极简交互界面
 │   │       └── CleanTextScrollView.swift # 无滚动条流式文本容器
 │   │
 │   ├── LiveSubtitles/                  # 实时音视频同传中文字幕模块

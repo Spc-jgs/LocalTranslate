@@ -285,7 +285,7 @@ struct ContentView: View {
                     .fill(Color.primary.opacity(0.045))
             }
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
         .fixedSize()
         .disabled(viewModel.isTranslating)
         .help(selectedTranslationStyle.shortDescription)

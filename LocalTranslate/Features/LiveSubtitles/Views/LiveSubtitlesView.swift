@@ -9,30 +9,28 @@ public struct LiveSubtitlesView: View {
     public init() {}
 
     public var body: some View {
-        ZStack {
-            // Apple 原生磨砂质感背景
+        ZStack(alignment: .center) {
+            // 背景层：鼠标离开时完全透明（无背景色），鼠标悬停或非运行状态时显示磨砂质感背景
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(
-                    Color.black.opacity(isHovering ? 0.82 : 0.65)
+                    Color.black.opacity(isHovering || !viewModel.isRunning || viewModel.showHistoryDrawer ? 0.82 : 0.0)
                 )
                 .background(
-                    .ultraThinMaterial,
+                    (isHovering || !viewModel.isRunning || viewModel.showHistoryDrawer)
+                    ? AnyShapeStyle(.ultraThinMaterial)
+                    : AnyShapeStyle(Color.clear),
                     in: RoundedRectangle(cornerRadius: 16, style: .continuous)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        .stroke(
+                            Color.white.opacity((isHovering || !viewModel.isRunning || viewModel.showHistoryDrawer) ? 0.12 : 0.0),
+                            lineWidth: 1
+                        )
                 )
 
+            // 核心字幕展示区 (支持 上一句 + 当前句 滚动流式排版)
             VStack(spacing: 0) {
-                // 顶部 Apple 原生悬浮工具条
-                if isHovering || !viewModel.isRunning {
-                    topControlBar
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                        .padding(.bottom, 8)
-                }
-
-                // 核心字幕展示区 (支持 上一句 + 当前句 滚动流式排版)
                 if !viewModel.showHistoryDrawer {
                     rollingSubtitleDisplayArea
                         .transition(.opacity)
@@ -42,15 +40,26 @@ public struct LiveSubtitlesView: View {
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .animation(.easeInOut(duration: 0.22), value: isHovering)
-            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: viewModel.showHistoryDrawer)
+            .padding(.horizontal, 20)
+            .padding(.top, viewModel.showHistoryDrawer ? 50 : 0)
+
+            // 顶部 Apple 原生悬浮工具条 (绝对定位在顶部)
+            VStack {
+                if isHovering || !viewModel.isRunning || viewModel.showHistoryDrawer {
+                    topControlBar
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .padding(.top, 12)
+                }
+                Spacer()
+            }
         }
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .frame(
-            width: 710,
-            height: viewModel.showHistoryDrawer ? 240 : (isHovering || !viewModel.isRunning ? 150 : 120)
+            width: 1180,
+            height: viewModel.showHistoryDrawer ? 250 : 130
         )
+        .animation(.easeInOut(duration: 0.22), value: isHovering)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: viewModel.showHistoryDrawer)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -169,58 +178,18 @@ public struct LiveSubtitlesView: View {
 
     private var rollingSubtitleDisplayArea: some View {
         VStack(spacing: 4) {
-            // 1. 上一句 (半透明灰白，给读者留出阅读缓冲，平滑衔接歌词与台词)
-            if let prev = viewModel.previousItem, hasActiveContent {
-                VStack(spacing: 2) {
-                    if shouldShowTranslation && !prev.translatedText.isEmpty {
-                        Text(prev.translatedText)
-                            .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
-                            .foregroundColor(.white.opacity(0.55))
-                            .multilineTextAlignment(.center)
-                            .lineLimit(1)
-                            .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
-                    }
-                    if shouldShowOriginal && !prev.originalText.isEmpty && prev.originalText != prev.translatedText {
-                        Text(prev.originalText)
-                            .font(.system(size: max(viewModel.fontSize * 0.58, 11), weight: .regular))
-                            .foregroundColor(.white.opacity(0.4))
-                            .multilineTextAlignment(.center)
-                            .lineLimit(1)
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // 2. 当前句 (纯白高亮加粗，抗眩光双层阴影)
+            // When speech is active, the last committed caption is context,
+            // not the focal point. Keep it quiet and give the current speech
+            // the full visual hierarchy.
             if hasActiveContent {
-                VStack(spacing: 3) {
-                    // 主译文
-                    if shouldShowTranslation {
-                        let textToShow = !viewModel.currentTranslatedText.isEmpty
-                            ? viewModel.currentTranslatedText
-                            : viewModel.currentOriginalText
-
-                        Text(textToShow)
-                            .font(.system(size: viewModel.fontSize, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
-                            .shadow(color: .black.opacity(0.95), radius: 3, x: 0, y: 1.5)
-                            .shadow(color: .black.opacity(0.6), radius: 6, x: 0, y: 2)
-                    }
-
-                    // 原文字幕
-                    if shouldShowOriginal && !viewModel.currentOriginalText.isEmpty {
-                        Text(viewModel.currentOriginalText)
-                            .font(.system(size: max(viewModel.fontSize * 0.66, 12), weight: .regular))
-                            .foregroundColor(.white.opacity(0.72))
-                            .multilineTextAlignment(.center)
-                            .lineLimit(1)
-                            .shadow(color: .black.opacity(0.85), radius: 2, x: 0, y: 1)
-                    }
+                if let committed = committedDisplayItem {
+                    contextCaption(committed)
                 }
-            } else if viewModel.isRunning {
-                // 等待声音输入状态
+                activeCaption
+            } else if let committed = committedDisplayItem {
+                primaryCommittedCaption(committed)
+            } else if committedDisplayItem == nil && viewModel.isRunning {
+                // 等待声音输入状态（仅在从未接收到任何声音时显示）
                 VStack(spacing: 3) {
                     Text("正在聆听电影/视频声音...")
                         .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
@@ -233,7 +202,7 @@ public struct LiveSubtitlesView: View {
                     }
                 }
                 .multilineTextAlignment(.center)
-            } else {
+            } else if committedDisplayItem == nil {
                 Text("点击顶部 ▶ 开启实时字幕同传")
                     .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
                     .foregroundColor(.white.opacity(0.35))
@@ -249,7 +218,74 @@ public struct LiveSubtitlesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .animation(.easeInOut(duration: 0.25), value: viewModel.previousItem)
+    }
+
+    private func contextCaption(_ item: SubtitleItem) -> some View {
+        VStack(spacing: 1) {
+            if shouldShowTranslation && !item.translatedText.isEmpty {
+                Text(item.translatedText)
+                    .font(.system(size: max(viewModel.fontSize * 0.62, 12), weight: .medium, design: .rounded))
+                    .foregroundColor(.white.opacity(0.42))
+                    .lineLimit(1)
+            }
+
+            if shouldShowOriginal && !item.originalText.isEmpty {
+                Text(item.originalText)
+                    .font(.system(size: max(viewModel.fontSize * 0.48, 10), weight: .regular))
+                    .foregroundColor(.white.opacity(0.3))
+                    .lineLimit(1)
+            }
+        }
+        .multilineTextAlignment(.center)
+        .shadow(color: .black.opacity(0.75), radius: 3, x: 0, y: 1)
+    }
+
+    private var activeCaption: some View {
+        VStack(spacing: 3) {
+            if shouldShowTranslation && !activeTranslatedText.isEmpty {
+                Text(activeTranslatedText)
+                    .font(.system(size: viewModel.fontSize, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.9), radius: 6, x: 0, y: 2)
+                    .shadow(color: .black.opacity(0.7), radius: 12, x: 0, y: 3)
+            }
+
+            if shouldShowOriginal && !activeOriginalText.isEmpty {
+                Text(activeOriginalText)
+                    .font(.system(size: max(viewModel.fontSize * 0.68, 12), weight: .semibold))
+                    .foregroundColor(.white.opacity(activeTranslatedText.isEmpty ? 1.0 : 0.84))
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.8), radius: 6, x: 0, y: 2)
+            }
+        }
+        .multilineTextAlignment(.center)
+    }
+
+    private func primaryCommittedCaption(_ item: SubtitleItem) -> some View {
+        VStack(spacing: 3) {
+            if shouldShowTranslation && !item.translatedText.isEmpty {
+                Text(item.translatedText)
+                    .font(.system(size: viewModel.fontSize, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.9), radius: 6, x: 0, y: 2)
+                    .shadow(color: .black.opacity(0.7), radius: 12, x: 0, y: 3)
+            }
+
+            if shouldShowOriginal && !item.originalText.isEmpty {
+                Text(item.originalText)
+                    .font(.system(size: max(viewModel.fontSize * 0.66, 12), weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.8), radius: 6, x: 0, y: 2)
+            }
+        }
+        .multilineTextAlignment(.center)
     }
 
     // MARK: - Subtitle History Drawer (台词历史回溯抽屉)
@@ -338,8 +374,28 @@ public struct LiveSubtitlesView: View {
 
     // MARK: - Helpers
 
+    private var committedDisplayItem: SubtitleItem? {
+        viewModel.lastCommittedItem ?? viewModel.subtitleHistory.last
+    }
+
+    private var hasPendingFinal: Bool {
+        !viewModel.pendingCommittedOriginalText.isEmpty
+    }
+
+    private var activeOriginalText: String {
+        hasPendingFinal
+            ? viewModel.pendingCommittedOriginalText
+            : viewModel.currentOriginalText
+    }
+
+    private var activeTranslatedText: String {
+        hasPendingFinal
+            ? viewModel.pendingCommittedTranslatedText
+            : viewModel.currentTranslatedText
+    }
+
     private var hasActiveContent: Bool {
-        !viewModel.currentTranslatedText.isEmpty || !viewModel.currentOriginalText.isEmpty
+        !activeOriginalText.isEmpty || !activeTranslatedText.isEmpty
     }
 
     private var shouldShowTranslation: Bool {
