@@ -3,142 +3,237 @@ import Foundation
 @main
 struct LiveSubtitlePipelineStateTests {
     static func main() {
-        volatileRecognitionReplacesThenFinalizes()
-        partialPhraseRemainsUncommitted()
-        sentenceBoundaryLeavesRemainder()
-        multipleSentencesDrainInOrder()
-        longSentenceUsesClauseBoundaries()
-        silenceForcesOnlyStableTail()
-        hardLimitPreservesEveryWord()
-        hardLimitDoesNotCutAtArbitraryWhitespace()
-        shortFinalFragmentWaitsForContinuation()
+        volatileRangeReplacesInsteadOfAppending()
+        nonOverlappingVolatileRangesRemainOrdered()
+        finalizationEmitsEachSpanExactlyOnce()
+        finalizedSpanCannotBeRewritten()
+        wordLevelBatchPreservesCommittedAndAddsNewTail()
+        plannerPrefersSemanticPunctuation()
+        plannerUsesBoundedLookaheadWithoutPunctuation()
+        plannerWaitsForUnsafeTrailingWord()
+        silenceFlushesTheStableTail()
+        plannerNeverDropsOrDuplicatesWords()
         previewReadinessRejectsIncompletePhrases()
         compatiblePreviewGrowthRetainsDisplayedTranslation()
-        presentationQueueEnforcesMinimumDwell()
-        requestRevisionRejectsStaleKey()
+        requestRevisionAndRangeRejectStaleKey()
         finalIdentityRejectsDuplicateAndOldSession()
         print("LiveSubtitlePipelineStateTests: 14 passed")
     }
 
-    private static func volatileRecognitionReplacesThenFinalizes() {
-        var state = LiveSpeechRecognitionState()
-        let first = state.consume(text: "you should now set", isFinal: false)
-        expect(first.committedDelta.isEmpty, "volatile text must not commit")
-        expect(first.unstableText == "you should now set", "first volatile snapshot missing")
-
-        let revised = state.consume(text: "you should now set up", isFinal: false)
-        expect(revised.committedDelta.isEmpty, "revised volatile text must not commit")
-        expect(revised.unstableText == "you should now set up", "volatile text must replace")
-
-        let final = state.consume(text: "you should now set up", isFinal: true)
-        expect(final.committedDelta == "you should now set up", "final must emit once as delta")
-        expect(final.unstableText.isEmpty, "final must clear volatile text")
-
-        _ = state.consume(text: "discard me", isFinal: false)
-        let emptyFinal = state.consume(text: "", isFinal: true)
-        expect(emptyFinal.committedDelta.isEmpty, "empty final must not invent source")
-        expect(emptyFinal.unstableText.isEmpty, "empty final must still clear volatile UI")
-    }
-
-    private static func partialPhraseRemainsUncommitted() {
-        let first = LiveSubtitleSemanticSegmenter.extractSegments(
-            from: "you should now set"
+    private static func volatileRangeReplacesInsteadOfAppending() {
+        var ledger = LiveTranscriptSpanLedger()
+        let first = ledger.apply(
+            text: "you should now set",
+            range: range(0, 2),
+            isFinal: false,
+            finalizedThrough: 0
         )
-        expect(first.segments.isEmpty, "unfinished phrase must not commit")
-        expect(first.remainder == "you should now set", "partial must remain replaceable")
+        expect(first.volatileText == "you should now set", "first partial missing")
 
-        let revised = LiveSubtitleSemanticSegmenter.extractSegments(
-            from: "you should now set up the project"
-        )
-        expect(revised.segments.isEmpty, "revised phrase must still be preview-only")
-        expect(
-            revised.remainder == "you should now set up the project",
-            "volatile revision must replace the earlier preview"
-        )
-    }
-
-    private static func sentenceBoundaryLeavesRemainder() {
-        let result = LiveSubtitleSemanticSegmenter.extractSegments(
-            from: "Set up the project. Then run the app"
-        )
-        expect(result.segments == ["Set up the project."], "sentence must commit once")
-        expect(result.remainder == "Then run the app", "tail must remain active")
-    }
-
-    private static func multipleSentencesDrainInOrder() {
-        let result = LiveSubtitleSemanticSegmenter.extractSegments(
-            from: "This is the first sentence. This is the second sentence! Third"
+        let revised = ledger.apply(
+            text: "you should now set up",
+            range: range(0, 2.5),
+            isFinal: false,
+            finalizedThrough: 0
         )
         expect(
-            result.segments == [
-                "This is the first sentence.",
-                "This is the second sentence!"
+            revised.volatileSpans.count == 1,
+            "overlapping partial must replace, not append"
+        )
+        expect(
+            revised.volatileText == "you should now set up",
+            "replacement must expose only the latest revision"
+        )
+        expect(
+            revised.volatileSpans[0].revision == 1,
+            "range replacement must advance its revision"
+        )
+    }
+
+    private static func nonOverlappingVolatileRangesRemainOrdered() {
+        var ledger = LiveTranscriptSpanLedger()
+        _ = ledger.apply(
+            text: "second range",
+            range: range(2, 2),
+            isFinal: false,
+            finalizedThrough: 0
+        )
+        let update = ledger.apply(
+            text: "first range",
+            range: range(0, 2),
+            isFinal: false,
+            finalizedThrough: 0
+        )
+        expect(
+            update.volatileText == "first range second range",
+            "range ledger must reconstruct audio order"
+        )
+    }
+
+    private static func finalizationEmitsEachSpanExactlyOnce() {
+        var ledger = LiveTranscriptSpanLedger()
+        _ = ledger.apply(
+            text: "set up the project",
+            range: range(0, 2),
+            isFinal: false,
+            finalizedThrough: 0
+        )
+        let finalized = ledger.apply(
+            text: "set up the project",
+            range: range(0, 2),
+            isFinal: true,
+            finalizedThrough: 2
+        )
+        expect(finalized.finalizedSpans.count == 1, "final must emit once")
+        expect(finalized.volatileSpans.isEmpty, "final must leave no volatile copy")
+
+        let duplicate = ledger.apply(
+            text: "set up the project",
+            range: range(0, 2),
+            isFinal: true,
+            finalizedThrough: 2
+        )
+        expect(duplicate.finalizedSpans.isEmpty, "duplicate final must not re-emit")
+    }
+
+    private static func finalizedSpanCannotBeRewritten() {
+        var ledger = LiveTranscriptSpanLedger()
+        _ = ledger.apply(
+            text: "immutable source",
+            range: range(0, 2),
+            isFinal: true,
+            finalizedThrough: 2
+        )
+        let malformedRevision = ledger.apply(
+            text: "rewritten source plus tail",
+            range: range(0, 2.5),
+            isFinal: false,
+            finalizedThrough: 2
+        )
+        expect(
+            malformedRevision.volatileSpans.isEmpty,
+            "a callback overlapping committed audio must not rewrite it"
+        )
+        expect(
+            malformedRevision.finalizedSpans.isEmpty,
+            "an immutable span must not be emitted twice"
+        )
+    }
+
+    private static func wordLevelBatchPreservesCommittedAndAddsNewTail() {
+        var ledger = LiveTranscriptSpanLedger()
+        _ = ledger.apply(
+            text: "committed",
+            range: range(0, 1),
+            isFinal: true,
+            finalizedThrough: 1
+        )
+        let update = ledger.apply(
+            fragments: [
+                LiveTranscriptFragment(
+                    text: "wrong",
+                    range: range(0, 1),
+                    isFinal: false
+                ),
+                LiveTranscriptFragment(
+                    text: "new tail",
+                    range: range(1, 1),
+                    isFinal: false
+                )
             ],
-            "finalized sentences must preserve order"
-        )
-        expect(result.remainder == "Third", "last incomplete tail must remain")
-    }
-
-    private static func longSentenceUsesClauseBoundaries() {
-        let source = "That's that is different than a lot of the other approaches, which is I have all of these applications and I am going to expose them to the wide internet, and then you have to put some sort of authentication or access control in front of it."
-        let result = LiveSubtitleSemanticSegmenter.extractSegments(from: source)
-        expect(
-            result.segments == [
-                "That's that is different than a lot of the other approaches,",
-                "which is I have all of these applications and I am going to expose them to the wide internet,",
-                "and then you have to put some sort of authentication or access control in front of it."
-            ],
-            "a long punctuated sentence must become readable semantic captions"
-        )
-        expect(result.remainder.isEmpty, "complete long sentence must fully drain")
-    }
-
-    private static func silenceForcesOnlyStableTail() {
-        let result = LiveSubtitleSemanticSegmenter.extractSegments(
-            from: "a framework-finalized phrase without punctuation",
-            force: true
-        )
-        expect(result.segments.count == 1, "silence must flush a stable tail")
-        expect(result.remainder.isEmpty, "forced stable tail must be consumed")
-    }
-
-    private static func hardLimitPreservesEveryWord() {
-        let source = (1...30).map { "w\($0)" }.joined(separator: " ")
-        let result = LiveSubtitleSemanticSegmenter.extractSegments(from: source)
-        let reconstructed = LiveSubtitleSemanticSegmenter.join(
-            result.segments.joined(separator: " "),
-            result.remainder
-        )
-        expect(reconstructed == source, "hard segmentation must not drop or duplicate words")
-    }
-
-    private static func hardLimitDoesNotCutAtArbitraryWhitespace() {
-        let source = (1...30).map { "word\($0)" }.joined(separator: " ")
-        let result = LiveSubtitleSemanticSegmenter.extractSegments(from: source)
-        expect(
-            result.segments.isEmpty,
-            "long text without punctuation must not be cut into an incomplete phrase"
-        )
-        expect(result.remainder == source, "uncut long text must remain in the stable tail")
-    }
-
-    private static func shortFinalFragmentWaitsForContinuation() {
-        let short = LiveSubtitleSemanticSegmenter.extractSegments(from: "Mosh reps.")
-        expect(short.segments.isEmpty, "tiny framework-final fragment must wait for context")
-
-        let continued = LiveSubtitleSemanticSegmenter.extractSegments(
-            from: "Mosh reps. Now you need Mosh installed on every machine."
+            finalizedThrough: 1
         )
         expect(
-            continued.segments == ["Mosh reps. Now you need Mosh installed on every machine."],
-            "tiny fragment must merge with the next complete sentence"
+            ledger.spans.first?.text == "committed",
+            "word batch must not rewrite committed audio"
+        )
+        expect(
+            update.volatileText == "new tail",
+            "non-overlapping tail in the same callback must still be accepted"
+        )
+    }
+
+    private static func plannerPrefersSemanticPunctuation() {
+        var planner = LiveTranslationWindowPlanner()
+        planner.append(finalizedSpans: [
+            span(
+                "one two three four five six seven eight, nine ten eleven twelve",
+                start: 0,
+                duration: 3.6
+            )
+        ])
+        let windows = planner.drain()
+        expect(windows.count == 1, "a clause boundary should produce one window")
+        expect(
+            windows[0].sourceText == "one two three four five six seven eight,",
+            "planner must close at punctuation before a hard word cut"
+        )
+        expect(
+            planner.pendingSourceText == "nine ten eleven twelve",
+            "lookahead must remain available for the next window"
+        )
+    }
+
+    private static func plannerUsesBoundedLookaheadWithoutPunctuation() {
+        var planner = LiveTranslationWindowPlanner()
+        let source = words(1...18)
+        planner.append(finalizedSpans: [span(source, start: 0, duration: 5.4)])
+        let windows = planner.drain()
+        expect(windows.count == 1, "long speech must not wait for punctuation forever")
+        expect(
+            windows[0].sourceText == words(1...16),
+            "normal window must remain within sixteen words"
+        )
+        expect(
+            planner.pendingSourceText == words(17...18),
+            "two finalized lookahead words must not be consumed"
+        )
+    }
+
+    private static func plannerWaitsForUnsafeTrailingWord() {
+        var planner = LiveTranslationWindowPlanner()
+        planner.append(finalizedSpans: [
+            span(
+                "one two three four five six seven set nine ten",
+                start: 0,
+                duration: 3
+            )
+        ])
+        expect(
+            planner.drain().isEmpty,
+            "window must wait when its only eligible boundary ends with a phrase head"
+        )
+    }
+
+    private static func silenceFlushesTheStableTail() {
+        var planner = LiveTranslationWindowPlanner()
+        planner.append(finalizedSpans: [
+            span("a short stable tail", start: 1, duration: 1.2)
+        ])
+        let windows = planner.drain(force: true)
+        expect(windows.count == 1, "silence must flush finalized tail")
+        expect(windows[0].sourceText == "a short stable tail", "flush changed text")
+        expect(planner.pendingSourceText.isEmpty, "flush must drain pending words")
+    }
+
+    private static func plannerNeverDropsOrDuplicatesWords() {
+        var planner = LiveTranslationWindowPlanner()
+        let source = words(1...32)
+        planner.append(finalizedSpans: [span(source, start: 0, duration: 8)])
+        let windows = planner.drain(force: true)
+        let reconstructed = windows.map(\.sourceText).joined(separator: " ")
+        expect(reconstructed == source, "window planning must preserve every word once")
+        expect(
+            windows.allSatisfy { wordCount($0.sourceText) <= 16 },
+            "forced windows must still honor the maximum length"
         )
     }
 
     private static func previewReadinessRejectsIncompletePhrases() {
+        expect(!LivePreviewStabilityPolicy.isReady("The benef"), "short fragment leaked")
         expect(
-            !LivePreviewStabilityPolicy.isReady("The benef"),
-            "two-word ASR fragment must not trigger Chinese preview"
+            LivePreviewStabilityPolicy.isReady("We can start today"),
+            "a safe four-word clause should translate promptly"
         )
         expect(
             !LivePreviewStabilityPolicy.isReady("you should now set"),
@@ -146,18 +241,32 @@ struct LiveSubtitlePipelineStateTests {
         )
         expect(
             !LivePreviewStabilityPolicy.isReady("The benefit there is that"),
-            "unsafe connective tail must wait for its complement"
+            "connective tail must wait for its complement"
         )
         expect(
             LivePreviewStabilityPolicy.isReady("The benefit is that Mosh stays connected"),
-            "complete clause-shaped preview should remain low latency"
+            "complete clause-shaped preview should stay low latency"
         )
         expect(
             !LivePreviewStabilityPolicy.shouldRequest(
                 candidate: "The benefit is that Mosh stays connected today",
                 after: "The benefit is that Mosh stays connected"
             ),
-            "one added word must not trigger another whole-preview request"
+            "one added word must not trigger a whole-preview request"
+        )
+        expect(
+            !LivePreviewStabilityPolicy.shouldRequest(
+                candidate: words(2...15),
+                after: words(1...14)
+            ),
+            "one-word rolling-window shift must not trigger a rewrite"
+        )
+        expect(
+            LivePreviewStabilityPolicy.shouldRequest(
+                candidate: words(4...17),
+                after: words(1...14)
+            ),
+            "three new rolling-window words should trigger the next caption"
         )
     }
 
@@ -167,45 +276,33 @@ struct LiveSubtitlePipelineStateTests {
                 displayedSource: "It is basically a drop-in replacement",
                 while: "It is basically a drop-in replacement for SSH"
             ),
-            "compatible source growth must keep the last complete preview visible"
+            "compatible growth should keep the last complete preview visible"
         )
         expect(
             !LivePreviewStabilityPolicy.canRetainDisplayedTranslation(
                 displayedSource: "It is basically a drop-in replacement",
                 while: "It was originally designed as a replacement"
             ),
-            "meaningful ASR correction must clear an incompatible preview"
+            "meaningful correction must clear incompatible translation"
         )
     }
 
-    private static func presentationQueueEnforcesMinimumDwell() {
-        var queue = LiveCaptionPresentationQueue<String>()
-        let first = queue.enqueue("first", now: 0, minimumDwell: 1.2)
-        expect(first == "first", "first completed caption must present immediately")
-
-        let tooSoon = queue.enqueue("second", now: 0.2, minimumDwell: 1.2)
-        expect(tooSoon == nil, "next caption must not skip the active dwell interval")
-        expect(queue.active == "first", "first caption must remain active during dwell")
-
-        let ready = queue.advanceIfReady(now: 1.2, minimumDwell: 1.2)
-        expect(ready == "second", "queued caption must advance in source order")
-        expect(queue.active == "second", "second caption must become active after dwell")
-    }
-
-    private static func requestRevisionRejectsStaleKey() {
+    private static func requestRevisionAndRangeRejectStaleKey() {
         let sessionID = UUID()
         let segmentID = UUID()
         let old = LiveTranslationRequestKey(
             sessionID: sessionID,
             segmentID: segmentID,
             revision: 1,
-            kind: .preview
+            kind: .preview,
+            audioRange: range(0, 2)
         )
         let current = LiveTranslationRequestKey(
             sessionID: sessionID,
             segmentID: segmentID,
             revision: 2,
-            kind: .preview
+            kind: .preview,
+            audioRange: range(0, 2.5)
         )
         expect(
             !LiveTranslationIdentityGate.acceptsPreview(
@@ -213,7 +310,7 @@ struct LiveSubtitlePipelineStateTests {
                 currentKey: current,
                 sessionID: sessionID
             ),
-            "older preview revision must fail identity validation"
+            "older preview revision and range must fail identity validation"
         )
         expect(
             LiveTranslationIdentityGate.acceptsPreview(
@@ -221,7 +318,7 @@ struct LiveSubtitlePipelineStateTests {
                 currentKey: current,
                 sessionID: sessionID
             ),
-            "current preview revision must pass identity validation"
+            "exact current preview must pass identity validation"
         )
     }
 
@@ -232,7 +329,8 @@ struct LiveSubtitlePipelineStateTests {
             sessionID: sessionID,
             segmentID: segmentID,
             revision: 0,
-            kind: .final
+            kind: .final,
+            audioRange: range(4, 2)
         )
         expect(
             LiveTranslationIdentityGate.acceptsFinal(
@@ -261,6 +359,33 @@ struct LiveSubtitlePipelineStateTests {
             ),
             "old-session final must be rejected"
         )
+    }
+
+    private static func span(
+        _ text: String,
+        start: TimeInterval,
+        duration: TimeInterval
+    ) -> LiveTranscriptSpan {
+        LiveTranscriptSpan(
+            range: range(start, duration),
+            text: text,
+            state: .finalized
+        )
+    }
+
+    private static func range(
+        _ start: TimeInterval,
+        _ duration: TimeInterval
+    ) -> LiveAudioTimeRange {
+        LiveAudioTimeRange(start: start, duration: duration)
+    }
+
+    private static func words(_ range: ClosedRange<Int>) -> String {
+        range.map { "w\($0)" }.joined(separator: " ")
+    }
+
+    private static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: \Character.isWhitespace).count
     }
 
     private static func expect(

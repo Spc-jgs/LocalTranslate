@@ -18,10 +18,6 @@ public final class SystemAudioCaptureService: NSObject, SCStreamDelegate, SCStre
     private var stream: SCStream?
     private let audioQueue = DispatchQueue(label: "com.shaopc.LocalTranslate.audioCaptureQueue", qos: .userInteractive)
     private var isCapturing = false
-    #if DEBUG
-    private var audioBufferSequence: UInt64 = 0
-    private var lastAudioBufferEnd: CMTime?
-    #endif
 
     private override init() {
         super.init()
@@ -33,11 +29,6 @@ public final class SystemAudioCaptureService: NSObject, SCStreamDelegate, SCStre
 
     public func startCapture() async throws {
         guard !isCapturing else { return }
-
-        #if DEBUG
-        audioBufferSequence = 0
-        lastAudioBufferEnd = nil
-        #endif
 
         // 检查屏幕录制权限
         guard CGPreflightScreenCaptureAccess() else {
@@ -93,8 +84,6 @@ public final class SystemAudioCaptureService: NSObject, SCStreamDelegate, SCStre
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio, sampleBuffer.isValid else { return }
-
-        traceAudioContinuity(sampleBuffer)
 
         guard let audioBuffer = sampleBufferToPCMBuffer(sampleBuffer) else {
             return
@@ -172,47 +161,4 @@ public final class SystemAudioCaptureService: NSObject, SCStreamDelegate, SCStre
         return min(max(rms * 5.0, 0.0), 1.0)
     }
 
-    private func traceAudioContinuity(_ sampleBuffer: CMSampleBuffer) {
-        #if DEBUG
-        audioBufferSequence += 1
-        let presentationTime = sampleBuffer.presentationTimeStamp
-        var duration = sampleBuffer.duration
-        if !duration.isValid || duration.seconds <= 0,
-           let description = sampleBuffer.formatDescription?.audioStreamBasicDescription,
-           description.mSampleRate > 0 {
-            duration = CMTime(
-                seconds: Double(sampleBuffer.numSamples) / description.mSampleRate,
-                preferredTimescale: 1_000_000_000
-            )
-        }
-
-        let shouldSampleLog = audioBufferSequence == 1
-            || audioBufferSequence.isMultiple(of: 100)
-        if shouldSampleLog {
-            print(
-                "[LiveAudio] sequence=\(audioBufferSequence) "
-                    + "pts=\(presentationTime) duration=\(duration)"
-            )
-        }
-
-        if let lastAudioBufferEnd,
-           presentationTime.isValid,
-           lastAudioBufferEnd.isValid {
-            let delta = CMTimeGetSeconds(
-                CMTimeSubtract(presentationTime, lastAudioBufferEnd)
-            )
-            if delta.isFinite, abs(delta) > 0.02 {
-                print(
-                    "[LiveAudio] sequence=\(audioBufferSequence) "
-                        + "discontinuity=\(delta)s pts=\(presentationTime) "
-                        + "duration=\(duration)"
-                )
-            }
-        }
-
-        if presentationTime.isValid, duration.isValid {
-            lastAudioBufferEnd = CMTimeAdd(presentationTime, duration)
-        }
-        #endif
-    }
 }

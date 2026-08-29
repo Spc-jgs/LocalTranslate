@@ -1,6 +1,6 @@
 # Fast-interview local live translation design
 
-Status: RESEARCHED / DESIGN READY / NOT IMPLEMENTED
+Status: MVP IMPLEMENTED / SOURCE VERIFIED / RUNTIME ACCEPTANCE PENDING
 
 Date: 2026-08-30
 
@@ -348,3 +348,91 @@ For a user-run 60-second English interview at approximately 160-190 words/min:
 
 Automated state tests and source build are engineering evidence. The user's
 real interview recording is the runtime and UX acceptance gate.
+
+## 10. MVP implementation result
+
+Implemented on 2026-08-30 against baseline commit `83c30cb`:
+
+- `SpeechTranscriber.Result` is retained as word-level attributed fragments
+  carrying `audioTimeRange`; whole-result range is only the fallback.
+- `LiveTranscriptSpanLedger` reconciles each callback as one batch. Volatile
+  ranges are replaced, finalized ranges are immutable, and finalized spans are
+  emitted to downstream planning exactly once.
+- `LiveTranslationWindowPlanner` uses a 2.2-second target, 6-14-word bounds,
+  punctuation preference, two-word lookahead, unsafe trailing-token checks and
+  a 700 ms silence flush.
+- Preview, current stable translation and archive work share one Ollama worker.
+  The foreground slot is latest-wins; displaced stable work moves to history;
+  cancellation fully unwinds before the replacement request starts.
+- Completion identity includes session, segment, revision, kind and audio
+  range. Stale responses cannot overwrite the current caption.
+- The presentation FIFO and fixed dwell were removed. The overlay renders one
+  large current caption, an optional one-line source, no previous-caption row,
+  no text slide animation, and an always-visible contrast surface.
+- When measured lag exceeds 3 seconds, volatile preview translation pauses and
+  the newest stable window owns the foreground slot. Source history remains
+  ordered and committed translations are inserted only once.
+- The inherited `qwen3.5:4b` model remains selected. The live request profile is
+  `temperature=0`, `num_ctx=2048`, `num_predict=64`, `think=false`, with at most
+  one prior stable pair as context.
+
+Engineering verification:
+
+- Focused state harness: `14 passed`.
+- Unsigned Xcode source build: `BUILD SUCCEEDED`.
+- Diff whitespace check: passed.
+- The app was not launched and no interview playback was performed in this
+  implementation turn. Display-lag percentiles, real ASR reconstruction and
+  visual experience remain the user's runtime acceptance gate.
+
+## 11. First runtime acceptance correction
+
+The first user-run screenshot exposed an English-only regression: a stable
+translation request received the foreground identity, but the next partial ASR
+callback immediately replaced that identity with a source-only preview state.
+After lag crossed three seconds, catch-up mode disabled preview requests, so a
+completed stable translation could enter history without becoming the current
+caption.
+
+The display pair and live ASR candidate are now separate states:
+
+- partial growth updates only the next translation candidate;
+- an in-flight preview or stable request is not replaced on every ASR callback;
+- a finalized translation remains visible until another complete translation
+  atomically replaces it;
+- an incompatible ASR correction may clear only an unstable preview, never a
+  finalized displayed translation;
+- the initial preview remains allowed before any translated audio range has
+  been displayed, even if absolute recognition time has already passed three
+  seconds.
+
+Source build after this correction: `BUILD SUCCEEDED`. A repeated interview run
+is still required for runtime acceptance.
+
+## 12. Live-first correction after qualitative rejection
+
+The user rejected the final-first runtime tradeoff as both slower and harder to
+understand than the original experience. Finalized translation is therefore
+removed from the continuous-speech foreground path:
+
+- the current overlay is driven by complete, atomically swapped preview
+  translations;
+- finalized windows are archive/history work and can seed the overlay only at
+  a caught-up silence boundary;
+- the preview throttle starts on the first eligible callback instead of
+  repeatedly debouncing on every ASR revision;
+- preview readiness begins at four words but still rejects unsafe phrase heads
+  and connective tails such as `set`, `that` and `because`;
+- one preview request is allowed to finish while compatible source continues
+  growing; token streaming is never exposed to the UI;
+- preview input is capped to the latest 14 words and carries one previous
+  displayed translation pair as context;
+- a rolling preview shifts only after at least three new words, preventing
+  one-word full-caption rewrites;
+- the archive worker waits 120 ms before starting so the next live preview can
+  claim the single Ollama slot without needless start/cancel churn;
+- finalized history windows use 8-16 words and a 2.6-second target for better
+  semantic completeness.
+
+Focused state harness remains `14 passed`; unsigned source build remains
+`BUILD SUCCEEDED`. Runtime quality remains user-owned acceptance evidence.

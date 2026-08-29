@@ -6,7 +6,10 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
     public static let shared = LiveSubtitlesOverlayPanel()
 
     private init() {
-        let size = NSSize(width: 1180, height: 170)
+        let screenWidth = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame.width
+            ?? 1_440
+        let width = min(max(screenWidth * 0.72, 720), 980)
+        let size = NSSize(width: width, height: 124)
 
         let hostingView = NSHostingView(
             rootView: LiveSubtitlesView()
@@ -39,7 +42,7 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
             .fullScreenAuxiliary
         ]
 
-        self.animationBehavior = .utilityWindow
+        self.animationBehavior = .none
 
         positionAtScreenBottom()
     }
@@ -54,6 +57,18 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
 
     public func setClickThrough(_ enabled: Bool) {
         self.ignoresMouseEvents = enabled
+    }
+
+    public func setHistoryExpanded(_ expanded: Bool) {
+        let previousFrame = frame
+        let height: CGFloat = expanded ? 250 : 124
+        setContentSize(NSSize(width: previousFrame.width, height: height))
+        setFrameOrigin(
+            NSPoint(
+                x: previousFrame.midX - frame.width / 2,
+                y: previousFrame.minY
+            )
+        )
     }
 
     public func positionAtScreenBottom() {

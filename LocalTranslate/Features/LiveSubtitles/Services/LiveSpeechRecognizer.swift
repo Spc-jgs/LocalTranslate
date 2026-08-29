@@ -60,7 +60,7 @@ private actor RecognitionEngine {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analysisTask: Task<Void, Never>?
     private var resultsTask: Task<Void, Never>?
-    private var transcriptState = LiveSpeechRecognitionState()
+    private var transcriptLedger = LiveTranscriptSpanLedger()
 
     private var analyzerFormat: AVAudioFormat?
     private var audioConverter: AVAudioConverter?
@@ -155,7 +155,7 @@ private actor RecognitionEngine {
         self.analyzer = analyzer
         self.analyzerFormat = format
         self.inputContinuation = continuation
-        self.transcriptState.reset()
+        self.transcriptLedger.reset()
         self.isRunning = true
 
         self.resultsTask = Task { [weak self] in
@@ -199,7 +199,7 @@ private actor RecognitionEngine {
         analyzerFormat = nil
         audioConverter = nil
         converterInputFormat = nil
-        transcriptState.reset()
+        transcriptLedger.reset()
 
         await SpeechModels.endRetention()
     }
@@ -277,14 +277,48 @@ private actor RecognitionEngine {
     private func consume(_ result: SpeechTranscriber.Result) {
         guard isRunning else { return }
 
-        // A volatile result replaces the current audio phrase. Only a framework
-        // final result produces an append-only committed delta.
-        let update = transcriptState.consume(
-            text: String(result.text.characters),
-            isFinal: result.isFinal
+        let update = transcriptLedger.apply(
+            fragments: transcriptFragments(from: result),
+            finalizedThrough: finiteSeconds(result.resultsFinalizationTime)
         )
         trace(result)
         emitTranscription(update)
+    }
+
+    private func finiteSeconds(_ time: CMTime) -> TimeInterval {
+        let seconds = CMTimeGetSeconds(time)
+        return seconds.isFinite ? max(seconds, 0) : 0
+    }
+
+    private func transcriptFragments(
+        from result: SpeechTranscriber.Result
+    ) -> [LiveTranscriptFragment] {
+        let attributedText = result.text
+        let timedFragments: [LiveTranscriptFragment] = attributedText.runs.compactMap { run in
+            guard let timeRange = run.audioTimeRange else { return nil }
+            return LiveTranscriptFragment(
+                text: String(attributedText[run.range].characters),
+                range: LiveAudioTimeRange(
+                    start: finiteSeconds(timeRange.start),
+                    duration: finiteSeconds(timeRange.duration)
+                ),
+                isFinal: result.isFinal
+            )
+        }
+        if !timedFragments.isEmpty {
+            return timedFragments
+        }
+
+        return [
+            LiveTranscriptFragment(
+                text: String(attributedText.characters),
+                range: LiveAudioTimeRange(
+                    start: finiteSeconds(result.range.start),
+                    duration: finiteSeconds(result.range.duration)
+                ),
+                isFinal: result.isFinal
+            )
+        ]
     }
 
     private func trace(_ result: SpeechTranscriber.Result) {
