@@ -1,108 +1,114 @@
-# LocalTranslate · 本机 AI 小工具箱
+# LocalTranslate
 
-<p align="center">
-  <b>极轻量 · 零干扰 · 强隔离 · 本地隐私安全</b>
-  <br>
-  专为 macOS 打造的极简状态栏小工具集合：本地大模型即时划词/截图翻译 + 电影实时音视频同传中文字幕 + 多账号 AI 用量监控看板。
-</p>
+LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译、截图 OCR 翻译、系统音频实时字幕和 AI 用量看板放在同一个菜单栏 App 中。翻译与语音内容默认只发送到本机 Ollama。
 
----
+当前稳定版：[v1.2.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.2.0)
 
-## 🌟 核心特性
+## 功能
 
-### 1. 本地 AI 快捷翻译 (Local Translate)
-- **本地 Ollama 驱动**：数据完全留存在本地，零外部网络 API 泄露风险；支持任何 Ollama 兼容模型（如 `qwen3.5:4b`、`deepseek-r1` 等）。
-- **鼠标旁轻量划词气泡 (⌥⇧D)**：在任何 App 中选中文字后按 `⌥⇧D` 即可紧贴鼠标光标就近弹出极简磨砂气泡，流式出词、阅毕即走；支持一键复制与无缝展开至主窗口。
-- **全能主翻译面板 (⌥⇧T)**：在任何 App 中选中文字后按 `⌥⇧T` 或从菜单栏唤出完整翻译面板；支持原文二次编辑、翻译风格切换与清空输入。
-- **秒级截图翻译 (⌥⇧S)**：
-  - 硬件加速 Apple **Vision Framework (`VNRecognizeTextRequest`)** 离线 OCR，毫秒级精准提取文字。
-  - 内置**智能段落重组算法 (Smart Paragraph Merging)**，自动连贯断句，消除大模型机械直译硬伤。
-  - 零权限弹窗门槛，完全不污染系统剪贴板。
-- **技术场景深度优化**：内置面向开发者与技术文档的 Prompt 保护规则，精准保留变量名、API 标识符、代码块、JSON Key 与 CLI 标志，绝不盲目汉化。
-- **多种翻译风格**：内置“默认”、“自然”、“简洁”、“正式”、“直译”及“自定义 Prompt”风格，灵活应对日常阅读、代码注释或商务邮件。
-- **智能交互浮窗**：自动贴靠鼠标坐标与屏幕边界，流式生成平滑展示，支持置顶钉住 (`Pin`)、`Esc` 退出与一键复制反馈。
+### 本机翻译
 
-### 2. 电影/音视频实时同传中文字幕 (Live Subtitles)
-- **免装虚拟声卡与屏幕共享**：基于 macOS 原生 **Core Audio Process Tap** 捕获系统输出，仅申请“系统音频录制”权限，无需 ScreenCaptureKit、BlackHole 或 Soundflower。
-- **端侧离线语音识别**：基于 Apple 原生 **`SpeechAnalyzer` + `SpeechTranscriber`**，使用系统 VAD 区分可修订与已确认文本，支持多语种低延迟流式转录。
-- **AI 模型流式翻译 (⌥⇧C)**：复用文本翻译已配置的本地 **Ollama 模型**生成中文字幕；单请求在途、持续语音自动追赶最新识别文本，暂停后主动释放模型。
-- **极简电影悬浮字幕条**：
-  - 屏幕底部半透明深色磨砂胶囊底色；
-  - 高对比度纯白主译文字体（带抗背景反光柔和阴影）+ 原文对照；
-  - 悬停浮现控制栏：源语言切换、字号微调、动态音浪感知、鼠标穿透。
+- `⌥⇧T`：读取当前选中文本并打开完整翻译面板；支持编辑、翻译风格、复制和置顶。
+- `⌥⇧D`：在鼠标附近显示轻量翻译气泡。
+- `⌥⇧S`：调用 macOS 交互式框选，使用 Apple Vision 在本机 OCR，再交给 Ollama 翻译。
+- 默认 Ollama 地址是 `http://127.0.0.1:11434`，默认模型是 `qwen3.5:4b`；地址、模型、keep-alive 和翻译风格可在设置中修改。
 
-### 3. AI 用量监控看板 (AI Usage Hub)
-- **全方位 Provider 汇聚**：
-  - **Codex Plus A** (`~/.codex`)
-  - **Codex Plus B** (`~/.codex_account2`)
-  - **Antigravity (AGY)** (`~/.gemini/antigravity` 本地 SQLite 交互轨迹，底层 Protobuf 步进解析)
-  - **SuperGrok** (`~/.grok`)
-- **全景模型归一化看板**：按模型全局合并聚合 30 天 Token 消耗，支持 Fresh Input / Cache Read / Output / Reasoning 四维细分。
-- **额度与重置周期**：实时读取官方 API 与会话限额，直观展示 5h 窗口、周度/月度额度使用百分比及下次重置时间点。
-- **极速增量缓存引擎**：
-  - 配合双层磁盘与内存增量缓存（`AGYCacheStore` 与 `GrokCacheStore`），实现 **< 0.05ms** 极速加载。
-  - 切页零开销，120 FPS 丝滑切换。
-- **交互式趋势图表**：
-  - 基于 Swift Charts 展示 7 天 / 30 天每日 Token 消耗趋势（Codex + AGY + Grok 汇总）。
-  - **鼠标悬停交互**：鼠标移动到任意柱/点上，实时浮现当天的确切 Token 数量、交互轮次与虚线定位标尺。
+### 实时字幕
 
----
+- `⌥⇧C`：打开、暂停或恢复实时字幕。
+- 使用 Core Audio private process tap 捕获系统输出，不安装虚拟声卡，也不创建屏幕共享流。
+- 使用 Apple `SpeechAnalyzer` / `SpeechTranscriber` 做端侧增量 ASR，再使用本地 Ollama 翻译。
+- 支持英语、日语、韩语、普通话、粤语、法语、德语、西班牙语和俄语；可切换双语、仅译文或仅原文。
+- 当前译文保持高亮，已确认历史字幕不因后续识别 revision 被改写。
 
-## 🏗️ 架构与资源隔离设计
+实时链路不是“每次 partial 全文重翻”，而是两个并行状态：
 
-本项目秉承 **“每个功能互不影响，单工具启动极低开销”** 的微工具哲学：
-
-```
-LocalTranslate/
-├── App/                                # 应用入口与生命周期装配
-│   ├── LocalTranslateApp.swift         # MenuBarExtra 常驻、AppDelegate、浮窗调度
-│   └── Assets.xcassets                 # 全套 macOS AppIcon 与配色资源
-│
-├── Core/                               # 跨模块共享基础层（极轻量、无业务依赖）
-│   ├── Config/AppSettings.swift        # UserDefaults 统一配置管理
-│   └── System/ShellResolver.swift      # CLI 路径解析（带内存并发缓存）
-│
-├── Features/                           # 业务微工具特性模块（完全解耦）
-│   ├── Translate/                      # 翻译工具
-│   │   ├── Models/                     # 翻译风格定义
-│   │   ├── Services/                   # Ollama 客户端、全局快捷键、划词读取、Vision 截图 OCR
-│   │   ├── ViewModels/                 # 翻译状态机
-│   │   └── Views/                      # 悬浮面板、主界面、无滚动条流式文本框
-│   │
-│   ├── LiveSubtitles/                  # 实时音视频同传中文字幕
-│   │   ├── Models/                     # 字幕模型 (SubtitleItem)
-│   │   ├── Services/                   # Core Audio Tap、SpeechAnalyzer 识别、Ollama 模型翻译
-│   │   ├── ViewModels/                 # 同传状态机与音频电平 (LiveSubtitlesViewModel)
-│   │   └── Views/                      # 电影级半透明磨砂字幕浮窗 (LiveSubtitlesView)
-│   │
-│   └── AIUsage/                        # AI 用量看板
-│       ├── Models/                     # 统一领域模型 (AccountSnapshot, TokenBreakdown)
-│       ├── Services/                   # Codex 容错 Runner、AGY Protobuf 扫描器、Grok 扫描器、增量缓存
-│       ├── ViewModels/                 # 并发调度中心 (UsageStore)
-│       └── Views/                      # 全景模型分布、趋势图表与各账号卡片
-│
-├── Settings/                           # 个人工具箱集中设置 (780x640 统一原生窗口)
-│   └── SettingsView.swift              # 多分页懒加载导航
-│
-├── AGENTS.md                           # AI Agent 与开发者协作规范
-└── README.md                           # 本说明文档
+```text
+system audio -> ASR -> committed transcript + volatile partial
+                    -> semantic segmentation
+                    -> committed translation + preview translation
+                    -> immutable history + highlighted current caption
 ```
 
----
+audio range 用于消除 rolling overlap；`sessionID / segmentID / revision` 用于拦截旧 Ollama 响应。第一条当前译文可以 append-only 流式出现，后续 revision 原子更新，减少闪烁和语义跳变。
 
-## ⚙️ 快捷键速查
+### AI 用量看板
 
-| 快捷键 | 功能说明 | 触发场景 |
-| :--- | :--- | :--- |
-| `⌥ ⇧ T` | **智能取词翻译 / 呼出浮窗** | 全局任何应用程序中 |
-| `⌥ ⇧ S` | **交互式截图翻译** | 全局任何应用程序中 |
-| `⌥ ⇧ C` | **开启/暂停/隐藏实时音视频中文字幕条** | 看电影/视频/YouTube/Netflix 时 |
-| `⌘ ↩` | **立即翻译 / 重新翻译** | 翻译浮窗激活时 |
-| `Esc` | **隐藏浮窗 / 取消截图** | 浮窗激活或截图框选时 |
-| `⌘ ,` | **打开个人工具设置** | 任意界面 |
+- 汇总本机 Codex、Antigravity 和 Grok 数据源。
+- 模型用量按 `modelID` 全局归一，账号卡片聚焦配额窗口和时间汇总。
+- 使用内存与磁盘增量缓存；单个 Provider 失败时保留其他可用数据。
 
----
+## 环境要求
 
-## 🤝 开发者与协作规范
+- macOS 26 或更高版本；
+- Xcode 26.x（从源码构建时）；
+- 已安装并运行 [Ollama](https://ollama.com/)；
+- 至少一个本地翻译模型。
 
-若需对本项目进行扩展或提交代码，请参阅 [AGENTS.md](file:///Users/shaopc/playground/LocalTranslate-macos/LocalTranslate/AGENTS.md) 了解详细的架构约束、性能红线与测试要求。
+首次使用可以准备默认模型：
+
+```bash
+ollama pull qwen3.5:4b
+ollama serve
+```
+
+如果 Ollama 已由桌面 App 启动，不需要重复执行 `ollama serve`。
+
+## 安装与运行
+
+从 [Releases](https://github.com/Spc-jgs/LocalTranslate/releases) 下载 DMG 或 ZIP。当前自动发布产物未签名、未公证，首次打开可能被 Gatekeeper 阻止；可在 Finder 中按住 Control 点击 App，选择“打开”，并确认来源。
+
+也可以在 Xcode 26 中打开 `LocalTranslate.xcodeproj`，选择 `LocalTranslate` scheme 后运行。
+
+## 权限边界
+
+| 权限 | 触发功能 | 用途 |
+| --- | --- | --- |
+| 辅助功能 | 划词翻译 | 读取当前选中文本；必要时模拟复制并恢复剪贴板 |
+| 屏幕与系统音频录制 | 截图 OCR | 仅在用户按 `⌥⇧S` 框选屏幕时请求 |
+| 系统音频录制 | 实时字幕 | 通过 Core Audio process tap 读取系统输出 |
+| 语音识别 | 实时字幕 | 将系统音频转换为增量源文本 |
+
+实时字幕不使用麦克风，也不使用 ScreenCaptureKit display stream。截图 OCR 的屏幕权限与实时字幕链路相互独立。
+
+## 快捷键
+
+| 快捷键 | 功能 |
+| --- | --- |
+| `⌥⇧T` | 划词翻译 / 完整面板 |
+| `⌥⇧D` | 划词翻译气泡 |
+| `⌥⇧S` | 截图 OCR 翻译 |
+| `⌥⇧C` | 实时字幕 |
+| `⌘↩` | 在翻译面板中立即翻译 |
+| `Esc` | 隐藏浮窗或取消截图 |
+| `⌘,` | 打开设置 |
+
+## 隐私与资源
+
+- 文本、截图 OCR 结果和语音转录默认只发送到 `127.0.0.1` 的 Ollama；如果修改 Ollama Base URL，数据边界随该配置变化。
+- 截图在临时目录中生成，读取后删除。
+- 实时字幕暂停或关闭时会结束识别输入，并销毁 IOProc、aggregate device 和 process tap，同时取消翻译任务并请求卸载模型。
+- AI 用量模块读取本机客户端数据；在刷新 Provider 官方额度时，相关客户端自身可能访问网络。
+
+## 已知限制
+
+- v1.2.0 已优先解决 partial/final 混合、源转录重复、stale response 覆盖和字幕全文闪烁。
+- 快速访谈与长句场景仍可能感知约 2 秒端到端时差，后续优化记录在 [Issue #3](https://github.com/Spc-jgs/LocalTranslate/issues/3)。优化不会以恢复全文跳变或修改 committed 字幕为代价。
+- Release 产物尚未做 Developer ID 签名与 Apple notarization。
+
+## 开发
+
+```bash
+xcodebuild -project LocalTranslate.xcodeproj \
+  -scheme LocalTranslate \
+  -configuration Release \
+  -destination 'generic/platform=macOS' \
+  build \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+GitHub Actions 在 `macos-15` runner 上显式选择 Xcode 26.x。推送到 `main` 会执行 CI；推送 `v*` 标签会生成 DMG 和 ZIP，并创建 GitHub Release。
+
+架构不变量、实时字幕增量契约、权限检查和发布流程见 [AGENTS.md](AGENTS.md)。
