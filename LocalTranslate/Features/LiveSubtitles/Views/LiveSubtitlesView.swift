@@ -99,7 +99,11 @@ public struct LiveSubtitlesView: View {
                     audioWaveView
                 }
 
-                Text(viewModel.isRunning ? "同传中" : "已暂停")
+                Text(
+                    viewModel.isPreparing
+                        ? "准备中"
+                        : (viewModel.isRunning ? "同传中" : "已暂停")
+                )
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(viewModel.isRunning ? .green : .secondary)
             }
@@ -206,6 +210,11 @@ public struct LiveSubtitlesView: View {
         VStack(spacing: 4) {
             if hasActiveContent {
                 activeCaption
+            } else if viewModel.isPreparing {
+                Text("正在准备本机语音与翻译模型...")
+                    .font(.system(size: viewModel.fontSize * 0.72, weight: .medium))
+                    .foregroundColor(.white.opacity(0.65))
+                    .multilineTextAlignment(.center)
             } else if viewModel.isRunning {
                 // 等待声音输入状态（仅在从未接收到任何声音时显示）
                 VStack(spacing: 3) {
@@ -247,6 +256,12 @@ public struct LiveSubtitlesView: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .frame(maxWidth: 600)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(
+                        Color.accentColor.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
                     .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
                     .shadow(color: .black.opacity(0.9), radius: 6, x: 0, y: 2)
             }

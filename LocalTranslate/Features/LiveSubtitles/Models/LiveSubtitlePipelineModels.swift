@@ -260,10 +260,10 @@ struct LiveTranslationWindowPlanner: Sendable {
 
     mutating func drain(
         force: Bool = false,
-        minimumWords: Int = 8,
-        maximumWords: Int = 16,
-        targetDuration: TimeInterval = 2.6,
-        lookaheadWords: Int = 2
+        minimumWords: Int = 6,
+        maximumWords: Int = 12,
+        targetDuration: TimeInterval = 2.0,
+        lookaheadWords: Int = 1
     ) -> [LiveTranslationWindow] {
         var windows: [LiveTranslationWindow] = []
 

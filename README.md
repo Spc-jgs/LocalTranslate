@@ -23,7 +23,7 @@
 - **智能交互浮窗**：自动贴靠鼠标坐标与屏幕边界，流式生成平滑展示，支持置顶钉住 (`Pin`)、`Esc` 退出与一键复制反馈。
 
 ### 2. 电影/音视频实时同传中文字幕 (Live Subtitles)
-- **免装虚拟声卡**：基于 macOS 原生 **`ScreenCaptureKit`** 系统音频内录，无需安装任何 BlackHole / Soundflower 虚拟声卡驱动，即开即用。
+- **免装虚拟声卡与屏幕共享**：基于 macOS 原生 **Core Audio Process Tap** 捕获系统输出，仅申请“系统音频录制”权限，无需 ScreenCaptureKit、BlackHole 或 Soundflower。
 - **端侧离线语音识别**：基于 Apple 原生 **`SpeechAnalyzer` + `SpeechTranscriber`**，使用系统 VAD 区分可修订与已确认文本，支持多语种低延迟流式转录。
 - **AI 模型流式翻译 (⌥⇧C)**：复用文本翻译已配置的本地 **Ollama 模型**生成中文字幕；单请求在途、持续语音自动追赶最新识别文本，暂停后主动释放模型。
 - **极简电影悬浮字幕条**：
@@ -71,7 +71,7 @@ LocalTranslate/
 │   │
 │   ├── LiveSubtitles/                  # 实时音视频同传中文字幕
 │   │   ├── Models/                     # 字幕模型 (SubtitleItem)
-│   │   ├── Services/                   # ScreenCaptureKit 内录、SpeechAnalyzer 识别、Ollama 模型翻译
+│   │   ├── Services/                   # Core Audio Tap、SpeechAnalyzer 识别、Ollama 模型翻译
 │   │   ├── ViewModels/                 # 同传状态机与音频电平 (LiveSubtitlesViewModel)
 │   │   └── Views/                      # 电影级半透明磨砂字幕浮窗 (LiveSubtitlesView)
 │   │

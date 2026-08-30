@@ -23,6 +23,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     @Published public var fontSize: CGFloat = 26
     @Published public var displayLag: TimeInterval = 0
     @Published public var isCatchingUp = false
+    @Published public var isPreparing = false
 
     private let audioCaptureService = SystemAudioCaptureService.shared
     private nonisolated(unsafe) var speechRecognizer: LiveSpeechRecognizer!
@@ -56,8 +57,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private var latestRecognizedAudioEnd: TimeInterval = 0
     private var displayedAudioEnd: TimeInterval = 0
 
-    private let previewCoalesceInterval: Duration = .milliseconds(160)
-    private let catchUpCoalesceInterval: Duration = .milliseconds(80)
+    private let previewCoalesceInterval: Duration = .milliseconds(90)
+    private let catchUpCoalesceInterval: Duration = .milliseconds(50)
     private let silenceFlushInterval: TimeInterval = 0.7
 
     private init() {
@@ -97,9 +98,9 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         resetPipelineSession()
         errorMessage = nil
         isRunning = true
+        isPreparing = true
         lifecycleGeneration += 1
         let generation = lifecycleGeneration
-        translationService.prepare()
 
         startTask = Task { [weak self] in
             guard let self else { return }
@@ -110,7 +111,10 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             }
 
             do {
+                async let modelPreparation: Void = self.translationService.prepare()
                 try await self.speechRecognizer.start()
+                try Task.checkCancellation()
+                await modelPreparation
                 try Task.checkCancellation()
                 try await self.audioCaptureService.startCapture()
                 try Task.checkCancellation()
@@ -119,11 +123,14 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                     await self.releaseRuntimeResources()
                     return
                 }
+                self.isPreparing = false
             } catch is CancellationError {
+                self.isPreparing = false
                 await self.releaseRuntimeResources()
             } catch {
                 self.errorMessage = "实时字幕启动失败：\(error.localizedDescription)"
                 self.isRunning = false
+                self.isPreparing = false
                 self.translationService.cancel()
                 await self.releaseRuntimeResources()
             }
@@ -136,6 +143,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         }
 
         isRunning = false
+        isPreparing = false
         lifecycleGeneration += 1
         startTask?.cancel()
         startTask = nil
@@ -155,6 +163,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
         let shouldRestart = isRunning || startTask != nil
         isRunning = false
+        isPreparing = false
         lifecycleGeneration += 1
         let generation = lifecycleGeneration
         startTask?.cancel()
@@ -267,6 +276,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private func handleRecognitionUpdate(_ update: LiveSpeechRecognitionUpdate) {
         guard isRunning else { return }
 
+        translationService.setLiveActivity(true)
         latestRecognizedAudioEnd = max(
             latestRecognizedAudioEnd,
             update.latestAudioEnd
@@ -294,6 +304,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                       self.isRunning else { return }
                 let windows = self.windowPlanner.drain(force: true)
                 self.submitStableWindows(windows)
+                self.translationService.setLiveActivity(false)
                 self.refreshLiveSource()
             }
         }
@@ -423,20 +434,26 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         latestLiveSourceText = sourceText
         latestLiveSourceRange = range
 
-        if currentTranslatedText.isEmpty {
-            currentOriginalText = sourceText
-        }
+        currentOriginalText = sourceText
 
         // Do not replace an in-flight request on every ASR callback. Fast
         // compatible source growth otherwise cancels Ollama just before it can
         // complete, which leaves the overlay permanently source-only.
         if currentLiveKey != nil { return }
 
-        guard LivePreviewStabilityPolicy.isReady(sourceText) else { return }
+        guard LivePreviewStabilityPolicy.isReady(
+            sourceText,
+            minimumWordCount: 3
+        ) else { return }
         schedulePreviewSubmission()
     }
 
     private func schedulePreviewSubmission() {
+        if lastPreviewRequestedSourceText.isEmpty {
+            submitLatestPreviewIfNeeded()
+            return
+        }
+
         // Throttle to the first eligible callback and translate the newest
         // snapshot when the timer fires. Debouncing every 50-100 ms ASR update
         // would postpone translation indefinitely during fast speech.
@@ -468,7 +485,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
               currentLiveKey == nil else { return }
         guard LivePreviewStabilityPolicy.shouldRequest(
             candidate: sourceText,
-            after: lastPreviewRequestedSourceText
+            after: lastPreviewRequestedSourceText,
+            minimumAddedWords: isCatchingUp ? 2 : 3
         ) else { return }
 
         previewRevision += 1
@@ -481,12 +499,28 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         )
         currentLiveKey = key
         lastPreviewRequestedSourceText = sourceText
+        let mayStreamInitialTranslation = currentTranslatedText.isEmpty
 
         translationService.translatePreview(
             key: key,
             sourceText,
             context: liveTranslationContext,
-            sourceLanguage: sourceLanguage
+            sourceLanguage: sourceLanguage,
+            onPartial: { [weak self] responseKey, partialText in
+                guard let self,
+                      mayStreamInitialTranslation,
+                      responseKey == self.currentLiveKey,
+                      responseKey.sessionID == self.sessionID,
+                      !partialText.isEmpty else { return }
+                self.currentOriginalText = sourceText
+                self.currentTranslatedText = partialText
+                self.displayedTranslationSourceText = sourceText
+                self.displayedAudioEnd = max(
+                    self.displayedAudioEnd,
+                    responseKey.audioRange.end
+                )
+                self.refreshLagState()
+            }
         ) { [weak self] responseKey, translatedText in
             guard let self,
                   responseKey == self.currentLiveKey,
@@ -495,10 +529,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 return
             }
             self.currentLiveKey = nil
-            let responseLag = self.latestRecognizedAudioEnd
-                - responseKey.audioRange.end
-            guard responseLag <= 2.5,
-                  !translatedText.isEmpty else {
+            guard !translatedText.isEmpty else {
                 self.traceStaleDrop(responseKey)
                 self.refreshLiveSource()
                 return
@@ -516,7 +547,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     }
 
     private func boundedPreviewCandidate(
-        maximumWords: Int = 14
+        maximumWords: Int = 10
     ) -> (sourceText: String, range: LiveAudioTimeRange) {
         let words = latestLiveSourceText
             .split(whereSeparator: \Character.isWhitespace)
@@ -581,6 +612,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         currentTranslatedText = ""
         displayLag = 0
         isCatchingUp = false
+        isPreparing = false
     }
 
     private func traceStaleDrop(_ key: LiveTranslationRequestKey) {

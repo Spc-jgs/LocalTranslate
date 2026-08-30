@@ -85,16 +85,15 @@ public final class LiveTranslationService {
     private var archiveQueue: [TranslationJob] = []
     private var workerTask: Task<Void, Never>?
     private var workerGeneration = 0
+    private var liveActivity = false
 
     private init() {}
 
-    public func prepare() {
+    public func prepare() async {
         let model = AppSettings.model
         let baseURL = AppSettings.baseURL
         let keepAlive = AppSettings.keepAlive
-        Task.detached(priority: .utility) {
-            await Self.loadModel(model, baseURL: baseURL, keepAlive: keepAlive)
-        }
+        await Self.loadModel(model, baseURL: baseURL, keepAlive: keepAlive)
     }
 
     public func translatePreview(
@@ -102,6 +101,7 @@ public final class LiveTranslationService {
         _ text: String,
         context: [SubtitleItem] = [],
         sourceLanguage: SubtitleSourceLanguage,
+        onPartial: @escaping @MainActor (LiveTranslationRequestKey, String) -> Void,
         onCompletion: @escaping @MainActor (LiveTranslationRequestKey, String) -> Void
     ) {
         guard key.kind == .preview else { return }
@@ -120,10 +120,22 @@ public final class LiveTranslationService {
                 context: Array(context.suffix(1)),
                 sourceLanguage: sourceLanguage,
                 archivable: false,
-                onPartial: { _, _ in },
+                onPartial: onPartial,
                 completion: onCompletion
             )
         )
+    }
+
+    /// Archive translation is opportunistic background work. It must never
+    /// occupy Ollama while speech is actively producing live preview windows.
+    public func setLiveActivity(_ active: Bool) {
+        guard liveActivity != active else { return }
+        liveActivity = active
+        if active, activeIsArchive {
+            preemptActiveJob(requeue: true)
+        } else if !active {
+            startWorkerIfNeeded()
+        }
     }
 
     public func enqueueFinal(
@@ -181,6 +193,7 @@ public final class LiveTranslationService {
         archiveQueue.removeAll(keepingCapacity: false)
         workerTask?.cancel()
         workerTask = nil
+        liveActivity = false
 
         guard unloadModel else { return }
         let model = AppSettings.model
@@ -275,7 +288,8 @@ public final class LiveTranslationService {
 
     private func startWorkerIfNeeded() {
         guard workerTask == nil,
-              pendingForeground != nil || !archiveQueue.isEmpty else { return }
+              pendingForeground != nil
+                || (!liveActivity && !archiveQueue.isEmpty) else { return }
         let generation = workerGeneration
         workerTask = Task { [weak self] in
             await self?.drainQueue(generation: generation)
@@ -293,6 +307,10 @@ public final class LiveTranslationService {
         }
 
         while !Task.isCancelled, workerGeneration == generation {
+            if pendingForeground == nil, liveActivity {
+                return
+            }
+
             if pendingForeground == nil, !archiveQueue.isEmpty {
                 // Give the live preview throttle a short opportunity to fill
                 // the foreground slot before starting background history work.
@@ -304,7 +322,8 @@ public final class LiveTranslationService {
                     return
                 }
                 guard !Task.isCancelled,
-                      workerGeneration == generation else { return }
+                      workerGeneration == generation,
+                      !liveActivity else { return }
             }
 
             let job: TranslationJob
@@ -381,7 +400,7 @@ public final class LiveTranslationService {
             keepAlive: AppSettings.keepAlive
         )
 
-        var request = URLRequest(url: url, timeoutInterval: 30)
+        var request = URLRequest(url: url, timeoutInterval: 12)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
@@ -396,6 +415,7 @@ public final class LiveTranslationService {
         }
 
         var fullTranslation = ""
+        var lastPublishedPartial = ""
         var firstTokenAt: Date?
         for try await line in bytes.lines {
             try Task.checkCancellation()
@@ -410,7 +430,11 @@ public final class LiveTranslationService {
                 }
                 fullTranslation += content
                 let cleaned = cleanModelOutput(fullTranslation)
-                if !cleaned.isEmpty {
+                if shouldPublishPartial(
+                    cleaned,
+                    after: lastPublishedPartial
+                ) {
+                    lastPublishedPartial = cleaned
                     onPartial(cleaned)
                 }
             }
@@ -426,6 +450,20 @@ public final class LiveTranslationService {
             }
         }
         return cleanModelOutput(fullTranslation)
+    }
+
+    private func shouldPublishPartial(
+        _ candidate: String,
+        after previous: String
+    ) -> Bool {
+        guard candidate.count >= 2,
+              candidate.hasPrefix(previous),
+              candidate != previous else { return false }
+        let addedCount = candidate.count - previous.count
+        if previous.isEmpty || addedCount >= 2 {
+            return true
+        }
+        return candidate.last.map { "，。！？；：,.!?;:".contains($0) } ?? false
     }
 
     private func makeURL(path: String) throws -> URL {
@@ -524,7 +562,7 @@ public final class LiveTranslationService {
     ) async {
         let base = normalizedBaseURL(baseURL)
         guard let url = URL(string: base + "/api/generate") else { return }
-        var request = URLRequest(url: url, timeoutInterval: 30)
+        var request = URLRequest(url: url, timeoutInterval: 8)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(

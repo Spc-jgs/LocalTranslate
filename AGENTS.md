@@ -11,7 +11,7 @@
 - **按需加载与零空闲开销 (Lazy Loading & Zero Idle Cost)**：
   - 未激活的工具禁止在后台占用 CPU 或持有高内存对象。
   - 用户仅使用翻译功能时，AI 用量与实时字幕模块不得被加载，内存保持在最低基线（约 20~30MB）。
-  - 实时字幕条关闭或暂停时，必须立即销毁 `SCStream` 音频采集进程与语音识别会话，释放麦克风/内录资源。
+  - 实时字幕条关闭或暂停时，必须立即销毁 Core Audio process tap、aggregate device、IOProc 与语音识别会话，释放系统音频录制资源。
 - **主线程绝对非阻塞 (Never Block MainActor)**：
   - 严禁在主线程执行文件枚举、全量日志解析、子进程创建（如 `codex app-server` / `zsh`）或网络 I/O。
   - 耗时任务一律派发至 `.utility` 或 `.background` QoS 异步后台任务。
@@ -57,7 +57,7 @@ LocalTranslate/
 │   │   ├── Models/
 │   │   │   └── SubtitleItem.swift      # 字幕数据模型与源语言枚举
 │   │   ├── Services/
-│   │   │   ├── SystemAudioCaptureService.swift # ScreenCaptureKit 原生系统音频内录
+│   │   │   ├── SystemAudioCaptureService.swift # Core Audio Process Tap 系统音频内录
 │   │   │   ├── LiveSpeechRecognizer.swift      # Apple SpeechAnalyzer 原生端侧 ASR 与 VAD
 │   │   │   └── LiveTranslationService.swift    # 现有 Ollama 模型的低延迟字幕翻译
 │   │   ├── ViewModels/
@@ -107,8 +107,8 @@ LocalTranslate/
 - **增量缓存保护**：扫描 `~/.grok/sessions` 与 `~/.gemini/antigravity/conversations` 必须严格核对 `fileSize` 与 `mtime`，命中缓存直接跳过磁盘 I/O（耗时 < 0.05ms）。
 
 ### 3.4 实时字幕资源释放与无感同传（防资源泄漏漂移）
-- **关闭即销毁**：实时字幕浮窗关闭或用户暂停时，必须立即调用 `stopCapture()` 释放 `SCStream`，结束 `SpeechAnalyzer` 输入流并释放语音模型，同时取消字幕翻译任务并请求 Ollama 卸载模型，不得在后台静默录音或空转 CPU。
-- **原生边界**：系统音频采集和 ASR 使用 Apple 原生框架；字幕语义翻译复用项目既有 Ollama 模型与设置，不另建 Apple Translation 语言包链路，也不新增第三方依赖。
+- **关闭即销毁**：实时字幕浮窗关闭或用户暂停时，必须立即调用 `stopCapture()`，按 IOProc → aggregate device → process tap 的顺序释放 Core Audio 资源，结束 `SpeechAnalyzer` 输入流并释放语音模型，同时取消字幕翻译任务并请求 Ollama 卸载模型。
+- **原生边界**：系统音频使用 Core Audio Process Tap 并声明 `NSAudioCaptureUsageDescription`；实时字幕链路不创建 display-level `SCStream`。ASR 使用 Apple 原生框架，字幕语义翻译复用既有 Ollama 模型与设置。
 - **电影级视觉保护**：字幕条默认采用 `.ultraThinMaterial` 半透明黑色胶囊底色与高对比度白色文字（带暗阴影），确保在任意视频明亮背景下均清晰可读。
 
 ---
