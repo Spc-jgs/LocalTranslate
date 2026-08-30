@@ -6,6 +6,33 @@ private enum PersonalToolPage: String, CaseIterable, Identifiable {
     case usage = "AI 用量"
 
     var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .translation:
+            return "translate"
+        case .usage:
+            return "chart.bar.xaxis"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .translation:
+            return "翻译设置"
+        case .usage:
+            return "用量与额度"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .translation:
+            return "本地模型、风格与运行参数"
+        case .usage:
+            return "今日模型、费用与订阅额度"
+        }
+    }
 }
 
 struct SettingsView: View {
@@ -63,30 +90,40 @@ struct SettingsView: View {
 
     var body: some View {
 
-        VStack(spacing: 0) {
+        HStack(spacing: 0) {
 
-            header
+            sidebar
 
             Divider()
-                .opacity(0.28)
+                .opacity(0.34)
 
-            Group {
-                switch selectedPage {
+            VStack(spacing: 0) {
 
-                case .translation:
-                    translationSettingsContent
+                pageHeader
 
-                case .usage:
-                    AIUsageView(
-                        store: usageStore
-                    )
+                Divider()
+                    .opacity(0.28)
+
+                Group {
+                    switch selectedPage {
+
+                    case .translation:
+                        translationSettingsContent
+
+                    case .usage:
+                        AIUsageView(
+                            store: usageStore
+                        )
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(
-            width: 780,
-            height: 640
+            width: 980,
+            height: 700
         )
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await refresh()
         }
@@ -96,16 +133,6 @@ struct SettingsView: View {
 
             Task {
                 await refreshDiagnostics()
-            }
-        }
-        .onChange(
-            of: selectedPage
-        ) { _, newPage in
-
-            if newPage == .usage {
-                usageStore.start()
-            } else {
-                usageStore.stop()
             }
         }
     }
@@ -136,80 +163,134 @@ struct SettingsView: View {
         .scrollIndicators(.visible)
     }
 
+    // MARK: - Navigation
+
+    private var sidebar: some View {
+
+        VStack(alignment: .leading, spacing: 0) {
+
+            HStack(spacing: 10) {
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.accentColor.gradient)
+
+                    Image(systemName: "translate")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 34, height: 34)
+                .shadow(color: Color.accentColor.opacity(0.2), radius: 5, y: 2)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("LocalTranslate")
+                        .font(.system(size: 14, weight: .semibold))
+
+                    Text("本机轻量工具箱")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 18)
+            .padding(.bottom, 22)
+
+            Text("设置")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .textCase(.uppercase)
+                .tracking(0.8)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 7)
+
+            VStack(spacing: 4) {
+                ForEach(PersonalToolPage.allCases) { page in
+                    sidebarButton(for: page)
+                }
+            }
+            .padding(.horizontal, 10)
+
+            Spacer()
+
+            HStack(spacing: 7) {
+                Image(systemName: "lock.shield")
+                Text("数据保留在本机")
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 16)
+        }
+        .frame(width: 205)
+        .background {
+            Rectangle()
+                .fill(.regularMaterial)
+                .overlay(Color.primary.opacity(0.018))
+        }
+    }
+
+    private func sidebarButton(for page: PersonalToolPage) -> some View {
+
+        let isSelected = selectedPage == page
+
+        return Button {
+            selectedPage = page
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: page.systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(page.rawValue)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+
+                    Text(page == .translation ? "Ollama 与快捷键" : "Token、成本与额度")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.12) : .clear)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
     // MARK: - Header
 
-    private var header: some View {
+    private var pageHeader: some View {
 
         HStack(spacing: 12) {
-
-            ZStack {
-
-                RoundedRectangle(
-                    cornerRadius: 9,
-                    style: .continuous
-                )
-                .fill(
-                    Color.primary.opacity(0.06)
-                )
-
-                Image(
-                    systemName: "translate"
-                )
-                .font(
-                    .system(
-                        size: 14,
-                        weight: .semibold
-                    )
-                )
-                .foregroundStyle(.secondary)
-            }
-            .frame(
-                width: 32,
-                height: 32
-            )
 
             VStack(
                 alignment: .leading,
                 spacing: 2
             ) {
 
-                Text("个人工具")
+                Text(selectedPage.title)
                     .font(
                         .system(
-                            size: 15,
+                            size: 17,
                             weight: .semibold
                         )
                     )
 
-                Text(
-                    selectedPage == .translation
-                    ? "翻译设置 · 本地 Ollama"
-                    : "AI 用量 · Codex + AGY + Grok 统计"
-                )
-                .font(
-                    .system(size: 11)
-                )
+                Text(selectedPage.subtitle)
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             }
 
             Spacer()
-
-            Picker(
-                "",
-                selection: $selectedPage
-            ) {
-
-                ForEach(
-                    PersonalToolPage.allCases
-                ) { page in
-
-                    Text(page.rawValue)
-                        .tag(page)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 180)
 
             Button {
 
@@ -229,10 +310,10 @@ struct SettingsView: View {
                     )
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .frame(
-                width: 28,
-                height: 28
+                width: 30,
+                height: 30
             )
             .disabled(currentPageIsRefreshing)
             .help(
@@ -242,7 +323,7 @@ struct SettingsView: View {
             )
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 14)
+        .padding(.vertical, 15)
     }
 
     private var currentPageIsRefreshing: Bool {

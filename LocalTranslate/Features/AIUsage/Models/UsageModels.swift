@@ -1,18 +1,20 @@
 import Foundation
 
-enum ProviderKind: String, Codable, Sendable {
+nonisolated enum ProviderKind: String, Codable, Sendable, CaseIterable, Identifiable {
     case openAI = "OpenAI"
     case google = "Google"
     case xAI = "xAI"
+
+    var id: String { rawValue }
 }
 
-enum DataConfidence: String, Codable, Sendable {
+nonisolated enum DataConfidence: String, Codable, Sendable {
     case high = "High"
     case medium = "Medium"
     case low = "Low"
 }
 
-enum ActivityPeriod: String, CaseIterable, Codable, Sendable, Identifiable {
+nonisolated enum ActivityPeriod: String, CaseIterable, Codable, Sendable, Identifiable {
     case today = "Today"
     case sevenDays = "7 Days"
     case thirtyDays = "30 Days"
@@ -21,7 +23,7 @@ enum ActivityPeriod: String, CaseIterable, Codable, Sendable, Identifiable {
     var id: String { rawValue }
 }
 
-struct QuotaWindow: Identifiable, Codable, Sendable {
+nonisolated struct QuotaWindow: Identifiable, Codable, Sendable {
     let id: String
     let title: String
     let usedPercent: Double?
@@ -35,7 +37,7 @@ struct QuotaWindow: Identifiable, Codable, Sendable {
     }
 }
 
-struct TokenBreakdown: Codable, Sendable, Equatable {
+nonisolated struct TokenBreakdown: Codable, Sendable, Equatable {
     var inputTokens: Int64
     var outputTokens: Int64
     var cachedReadTokens: Int64
@@ -77,7 +79,7 @@ struct TokenBreakdown: Codable, Sendable, Equatable {
     }
 }
 
-struct PeriodActivity: Identifiable, Codable, Sendable {
+nonisolated struct PeriodActivity: Identifiable, Codable, Sendable {
     let period: ActivityPeriod
     let tokens: Int64
     let turns: Int
@@ -86,7 +88,7 @@ struct PeriodActivity: Identifiable, Codable, Sendable {
     var id: String { period.id }
 }
 
-struct DailyActivity: Identifiable, Codable, Sendable {
+nonisolated struct DailyActivity: Identifiable, Codable, Sendable {
     let date: Date
     let tokens: Int64
     let turns: Int
@@ -94,18 +96,24 @@ struct DailyActivity: Identifiable, Codable, Sendable {
     var id: Date { date }
 }
 
-struct ModelActivity: Identifiable, Codable, Sendable {
+nonisolated enum UsageCostKind: String, Codable, Sendable {
+    case recorded
+    case estimated
+}
+
+nonisolated struct ModelActivity: Identifiable, Codable, Sendable {
     let modelID: String
     let displayName: String
     let period: ActivityPeriod
     let usage: TokenBreakdown
     let turns: Int
     let costUSD: Double?
+    let costKind: UsageCostKind?
 
     var id: String { "\(period.rawValue)::\(modelID)" }
 }
 
-struct AccountSnapshot: Identifiable, Codable, Sendable {
+nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {
     let id: String
     let sortOrder: Int
     let provider: ProviderKind
@@ -120,18 +128,21 @@ struct AccountSnapshot: Identifiable, Codable, Sendable {
     let sourceLabel: String
     let confidence: DataConfidence
     let statusMessage: String?
+    let schemaVersion: Int?
+    let quotaAvailable: Bool?
+    let activityAvailable: Bool?
 
     func activity(for period: ActivityPeriod) -> PeriodActivity? {
         activity.first { $0.period == period }
     }
 }
 
-protocol UsageProvider: Sendable {
+nonisolated protocol UsageProvider: Sendable {
     var providerID: String { get }
     func fetch() async throws -> AccountSnapshot
 }
 
-enum UsageHubError: LocalizedError, Sendable {
+nonisolated enum UsageHubError: LocalizedError, Sendable {
     case executableNotFound(String)
     case processFailed(String)
     case timeout(String)

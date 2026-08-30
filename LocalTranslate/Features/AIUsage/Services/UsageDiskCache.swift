@@ -4,6 +4,10 @@ final class UsageDiskCache: @unchecked Sendable {
     static let shared = UsageDiskCache()
 
     private let cacheFileURL: URL
+    private let writeQueue = DispatchQueue(
+        label: "com.localtranslate.ai-usage-cache",
+        qos: .utility
+    )
 
     private init() {
         let fileManager = FileManager.default
@@ -34,7 +38,7 @@ final class UsageDiskCache: @unchecked Sendable {
     func save(_ accounts: [AccountSnapshot]) {
         guard !accounts.isEmpty else { return }
 
-        Task.detached(priority: .background) { [cacheFileURL = self.cacheFileURL] in
+        writeQueue.async { [cacheFileURL = self.cacheFileURL] in
             do {
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601

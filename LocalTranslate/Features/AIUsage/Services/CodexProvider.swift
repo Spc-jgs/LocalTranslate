@@ -1,26 +1,74 @@
 import Foundation
-import SQLite3
 
-struct CodexProvider: UsageProvider {
+nonisolated struct CodexProvider: UsageProvider {
     let providerID: String
     let displayName: String
     let codexHome: URL
     let sortOrder: Int
 
     func fetch() async throws -> AccountSnapshot {
-        try await Task.detached(priority: .utility) {
-            let runner = CodexAppServerRunner(codexHome: codexHome)
-            let responses = runner.fetchAccountDataGracefully()
-            let realModels = self.extractRealModels(from: codexHome)
-
-            return Self.makeSnapshot(
-                providerID: providerID,
-                displayName: displayName,
-                sortOrder: sortOrder,
-                responses: responses,
-                realModels: realModels
+        async let responses = fetchAccountData()
+        async let localUsage = UsageActivityIndexer.shared.scanCodex(
+            providerID: providerID,
+            codexHome: codexHome
+        )
+        let responseValue = await responses
+        let localResult: Result<IndexedActivitySnapshot, Error>
+        do {
+            localResult = .success(try await localUsage)
+        } catch {
+            localResult = .failure(error)
+        }
+        let localValue: IndexedActivitySnapshot
+        let activityError: String?
+        switch localResult {
+        case .success(let value):
+            localValue = value
+            activityError = nil
+        case .failure(let error):
+            localValue = IndexedActivitySnapshot(
+                periodActivity: [],
+                dailyActivity: [],
+                modelActivity: [],
+                indexedFiles: 0,
+                catchUpPending: false
             )
-        }.value
+            activityError = error.localizedDescription
+        }
+
+        return Self.makeSnapshot(
+            providerID: providerID,
+            displayName: displayName,
+            sortOrder: sortOrder,
+            responses: responseValue,
+            localUsage: localValue,
+            activityError: activityError
+        )
+    }
+
+    private func fetchAccountData() async -> CodexResponses {
+        let cancellation = CodexProcessCancellation()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    guard !cancellation.isCancelled else {
+                        continuation.resume(
+                            returning: CodexResponses.cancelled
+                        )
+                        return
+                    }
+
+                    let runner = CodexAppServerRunner(codexHome: codexHome)
+                    continuation.resume(
+                        returning: runner.fetchAccountDataGracefully(
+                            cancellation: cancellation
+                        )
+                    )
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
     }
 
     private static func makeSnapshot(
@@ -28,7 +76,8 @@ struct CodexProvider: UsageProvider {
         displayName: String,
         sortOrder: Int,
         responses: CodexResponses,
-        realModels: [String: Int]
+        localUsage: IndexedActivitySnapshot,
+        activityError: String?
     ) -> AccountSnapshot {
         let accountResult = responses.account["result"] as? [String: Any]
         let account = accountResult?["account"] as? [String: Any]
@@ -44,27 +93,34 @@ struct CodexProvider: UsageProvider {
         let dailyBuckets = usageResult?["dailyUsageBuckets"] as? [[String: Any]] ?? []
 
         let lifetime = int64(summary?["lifetimeTokens"])
-        let daily = parseDailyBuckets(dailyBuckets)
-        let total30d = sumDaily(daily, days: 30)
+        let serverDaily = parseDailyBuckets(dailyBuckets)
+        let daily = localUsage.dailyActivity.isEmpty
+            ? serverDaily
+            : localUsage.dailyActivity
+        let localByPeriod = Dictionary(
+            uniqueKeysWithValues: localUsage.periodActivity.map { ($0.period, $0) }
+        )
+        let total30d = localByPeriod[.thirtyDays]?.tokens
+            ?? sumDaily(daily, days: 30)
 
         let activity = [
             PeriodActivity(
                 period: .today,
-                tokens: sumDaily(daily, days: 1),
-                turns: 0,
-                costUSD: nil
+                tokens: localByPeriod[.today]?.tokens ?? sumDaily(daily, days: 1),
+                turns: localByPeriod[.today]?.turns ?? sumTurns(daily, days: 1),
+                costUSD: localByPeriod[.today]?.costUSD
             ),
             PeriodActivity(
                 period: .sevenDays,
-                tokens: sumDaily(daily, days: 7),
-                turns: 0,
-                costUSD: nil
+                tokens: localByPeriod[.sevenDays]?.tokens ?? sumDaily(daily, days: 7),
+                turns: localByPeriod[.sevenDays]?.turns ?? sumTurns(daily, days: 7),
+                costUSD: localByPeriod[.sevenDays]?.costUSD
             ),
             PeriodActivity(
                 period: .thirtyDays,
                 tokens: total30d,
-                turns: 0,
-                costUSD: nil
+                turns: localByPeriod[.thirtyDays]?.turns ?? sumTurns(daily, days: 30),
+                costUSD: localByPeriod[.thirtyDays]?.costUSD
             ),
             PeriodActivity(
                 period: .lifetime,
@@ -73,52 +129,11 @@ struct CodexProvider: UsageProvider {
                 costUSD: nil
             )
         ]
-
-        var modelActivity: [ModelActivity] = []
-        if total30d > 0 {
-            let totalTurns = max(1, realModels.values.reduce(0, +))
-
-            if !realModels.isEmpty {
-                modelActivity = realModels.map { modelKey, turns in
-                    let ratio = Double(turns) / Double(totalTurns)
-                    let modelTokens = Int64(Double(total30d) * ratio)
-                    let isReasoningModel = modelKey.contains("luna") || modelKey.contains("reasoning")
-                    let reasoningTokens = isReasoningModel ? Int64(Double(modelTokens) * 0.08) : 0
-
-                    return ModelActivity(
-                        modelID: modelKey,
-                        displayName: displayCodexModelName(modelKey),
-                        period: .thirtyDays,
-                        usage: TokenBreakdown(
-                            inputTokens: Int64(Double(modelTokens) * 0.90),
-                            outputTokens: Int64(Double(modelTokens) * 0.10),
-                            cachedReadTokens: Int64(Double(modelTokens) * 0.75),
-                            cacheCreationTokens: 0,
-                            reasoningTokens: reasoningTokens
-                        ),
-                        turns: turns,
-                        costUSD: nil
-                    )
-                }.sorted { $0.usage.totalTokens > $1.usage.totalTokens }
-            } else {
-                modelActivity = [
-                    ModelActivity(
-                        modelID: "gpt-5.6-sol",
-                        displayName: "GPT-5.6 Sol (Codex)",
-                        period: .thirtyDays,
-                        usage: TokenBreakdown(
-                            inputTokens: Int64(Double(total30d) * 0.90),
-                            outputTokens: Int64(Double(total30d) * 0.10),
-                            cachedReadTokens: Int64(Double(total30d) * 0.75),
-                            cacheCreationTokens: 0,
-                            reasoningTokens: 0
-                        ),
-                        turns: 0,
-                        costUSD: nil
-                    )
-                ]
-            }
-        }
+        let combinedStatus = [
+            responses.statusMessage,
+            activityError,
+            localUsage.catchUpPending ? "本地历史正在分片补齐" : nil
+        ].compactMap { $0 }.joined(separator: "；")
 
         return AccountSnapshot(
             id: providerID,
@@ -130,50 +145,20 @@ struct CodexProvider: UsageProvider {
             quotaWindows: windows,
             activity: activity,
             dailyActivity: daily,
-            modelActivity: modelActivity,
+            modelActivity: localUsage.modelActivity,
             updatedAt: Date(),
-            sourceLabel: "codex app-server",
-            confidence: responses.hasError ? .medium : .high,
-            statusMessage: responses.statusMessage
+            sourceLabel: localUsage.indexedFiles > 0
+                ? "Codex app-server + 本机增量索引"
+                : "Codex app-server",
+            confidence: responses.hasError || activityError != nil ? .medium : .high,
+            statusMessage: combinedStatus.isEmpty ? nil : combinedStatus,
+            schemaVersion: 3,
+            quotaAvailable: !windows.isEmpty,
+            activityAvailable: activityError == nil
         )
     }
 
-    private func extractRealModels(from homeDir: URL) -> [String: Int] {
-        let dbFile = homeDir.appendingPathComponent("logs_2.sqlite")
-        guard FileManager.default.fileExists(atPath: dbFile.path) else {
-            return [:]
-        }
-
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(dbFile.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
-            return [:]
-        }
-        defer { sqlite3_close(db) }
-
-        var stmt: OpaquePointer?
-        let query = "SELECT feedback_log_body FROM logs WHERE feedback_log_body LIKE '%model=%'"
-        var counts: [String: Int] = [:]
-
-        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                if let cStr = sqlite3_column_text(stmt, 0) {
-                    let text = String(cString: cStr)
-                    if let range = text.range(of: "model=") {
-                        let sub = text[range.upperBound...]
-                        let model = String(sub.prefix(while: { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }))
-                        if !model.isEmpty {
-                            counts[model, default: 0] += 1
-                        }
-                    }
-                }
-            }
-            sqlite3_finalize(stmt)
-        }
-
-        return counts
-    }
-
-    private static func displayCodexModelName(_ raw: String) -> String {
+    static func displayCodexModelName(_ raw: String) -> String {
         switch raw {
         case "gpt-5.6-sol":
             return "GPT-5.6 Sol (Codex)"
@@ -237,22 +222,22 @@ struct CodexProvider: UsageProvider {
     private static func windowTitle(_ minutes: Int) -> String {
         switch minutes {
         case 300:
-            return "5h"
+            return "5 小时"
         case 10_080:
-            return "Weekly"
+            return "每周"
         case 43_200...44_700:
-            return "Monthly"
+            return "每月"
         default:
             if minutes % 10_080 == 0 {
-                return "\(minutes / 10_080)w"
+                return "\(minutes / 10_080) 周"
             }
             if minutes % 1_440 == 0 {
-                return "\(minutes / 1_440)d"
+                return "\(minutes / 1_440) 天"
             }
             if minutes % 60 == 0 {
-                return "\(minutes / 60)h"
+                return "\(minutes / 60) 小时"
             }
-            return "\(minutes)m"
+            return "\(minutes) 分钟"
         }
     }
 
@@ -294,6 +279,20 @@ struct CodexProvider: UsageProvider {
         }
     }
 
+    private static func sumTurns(_ values: [DailyActivity], days: Int) -> Int {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let start = calendar.date(byAdding: .day, value: -(days - 1), to: today) else {
+            return 0
+        }
+
+        return values.reduce(0) { partial, item in
+            let day = calendar.startOfDay(for: item.date)
+            guard day >= start && day <= today else { return partial }
+            return partial + item.turns
+        }
+    }
+
     private static func int64(_ value: Any?) -> Int64 {
         if let number = value as? NSNumber { return number.int64Value }
         if let string = value as? String, let parsed = Int64(string) { return parsed }
@@ -313,22 +312,145 @@ struct CodexProvider: UsageProvider {
     }
 }
 
-private struct CodexResponses {
+nonisolated enum CodexAPIPriceCatalog {
+    private struct Price {
+        let inputPerMillion: Double
+        let cachedInputPerMillion: Double
+        let outputPerMillion: Double
+    }
+
+    // Promotional GPT-5.6 prices published by OpenAI and guaranteed through
+    // 2026-11-21. Stop estimating after that date instead of showing stale prices.
+    private static let validBefore = Date(timeIntervalSince1970: 1_795_305_600)
+
+    private static let prices: [String: Price] = [
+        "gpt-5.6": Price(
+            inputPerMillion: 4,
+            cachedInputPerMillion: 0.4,
+            outputPerMillion: 20
+        ),
+        "gpt-5.6-sol": Price(
+            inputPerMillion: 4,
+            cachedInputPerMillion: 0.4,
+            outputPerMillion: 20
+        ),
+        "gpt-5.6-terra": Price(
+            inputPerMillion: 2,
+            cachedInputPerMillion: 0.2,
+            outputPerMillion: 12
+        ),
+        "gpt-5.6-luna": Price(
+            inputPerMillion: 0.2,
+            cachedInputPerMillion: 0.02,
+            outputPerMillion: 1.2
+        )
+    ]
+
+    static func estimate(
+        modelID: String,
+        usage: TokenBreakdown,
+        now: Date = Date()
+    ) -> Double? {
+        guard now < validBefore,
+              let price = prices[modelID] else {
+            return nil
+        }
+
+        let isLongContext = usage.inputTokens > 272_000
+        let inputMultiplier = isLongContext ? 2.0 : 1.0
+        let outputMultiplier = isLongContext ? 1.5 : 1.0
+        let million = 1_000_000.0
+
+        let freshInputCost = Double(usage.freshInputTokens)
+            / million
+            * price.inputPerMillion
+            * inputMultiplier
+        let cachedInputCost = Double(usage.cachedReadTokens)
+            / million
+            * price.cachedInputPerMillion
+            * inputMultiplier
+        let cacheWriteCost = Double(usage.cacheCreationTokens)
+            / million
+            * price.inputPerMillion
+            * 1.25
+            * inputMultiplier
+        let outputCost = Double(usage.outputTokens)
+            / million
+            * price.outputPerMillion
+            * outputMultiplier
+
+        return freshInputCost + cachedInputCost + cacheWriteCost + outputCost
+    }
+}
+
+private nonisolated struct CodexResponses {
     let account: [String: Any]
     let rateLimits: [String: Any]
     let usage: [String: Any]
     let hasError: Bool
     let statusMessage: String?
+
+    static let cancelled = CodexResponses(
+        account: [:],
+        rateLimits: [:],
+        usage: [:],
+        hasError: true,
+        statusMessage: "刷新已取消"
+    )
 }
 
-private final class CodexAppServerRunner {
+private nonisolated final class CodexProcessCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var process: Process?
+
+    var isCancelled: Bool {
+        lock.lock()
+        let value = cancelled
+        lock.unlock()
+        return value
+    }
+
+    func attach(_ process: Process) {
+        lock.lock()
+        self.process = process
+        let shouldTerminate = cancelled
+        lock.unlock()
+
+        if shouldTerminate, process.isRunning {
+            process.terminate()
+        }
+    }
+
+    func detach() {
+        lock.lock()
+        process = nil
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let process = process
+        lock.unlock()
+
+        if let process, process.isRunning {
+            process.terminate()
+        }
+    }
+}
+
+private nonisolated final class CodexAppServerRunner {
     private let codexHome: URL
 
     init(codexHome: URL) {
         self.codexHome = codexHome
     }
 
-    func fetchAccountDataGracefully() -> CodexResponses {
+    func fetchAccountDataGracefully(
+        cancellation: CodexProcessCancellation
+    ) -> CodexResponses {
+        guard !cancellation.isCancelled else { return .cancelled }
         guard let codexURL = try? ShellResolver.resolve("codex") else {
             return CodexResponses(
                 account: [:],
@@ -360,6 +482,7 @@ private final class CodexAppServerRunner {
 
         do {
             try process.run()
+            cancellation.attach(process)
         } catch {
             reader.stop()
             return CodexResponses(
@@ -372,6 +495,7 @@ private final class CodexAppServerRunner {
         }
 
         defer {
+            cancellation.detach()
             reader.stop()
             if process.isRunning {
                 process.terminate()
@@ -419,7 +543,7 @@ private final class CodexAppServerRunner {
         let deadline = Date().addingTimeInterval(8)
         var capturedErrorMessage: String? = nil
 
-        while responses.count < 3 {
+        while responses.count < 3, !cancellation.isCancelled {
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { break }
 
@@ -497,7 +621,7 @@ private final class CodexAppServerRunner {
     }
 }
 
-private final class LineReader {
+private nonisolated final class LineReader {
     private let handle: FileHandle
     private let condition = NSCondition()
     private var buffer = Data()

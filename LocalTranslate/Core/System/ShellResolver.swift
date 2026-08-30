@@ -1,6 +1,6 @@
 import Foundation
 
-enum ShellResolver {
+nonisolated enum ShellResolver {
     private static let lock = NSLock()
     private static var cache: [String: URL] = [:]
 
