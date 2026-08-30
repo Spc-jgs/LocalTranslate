@@ -15,22 +15,31 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Select Latest Xcode
+      - name: Select Xcode 26
         run: |
-          for xcode in /Applications/Xcode_16.2.app /Applications/Xcode_16.1.app /Applications/Xcode_16.app /Applications/Xcode.app; do
+          selected=""
+          for xcode in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app /Applications/Xcode_26.1.1.app /Applications/Xcode_26.1.app /Applications/Xcode_26.0.1.app /Applications/Xcode_26.0.app; do
             if [ -d "$xcode" ]; then
-              echo "Selecting $xcode"
-              sudo xcode-select -s "$xcode/Contents/Developer"
+              selected="$xcode"
               break
             fi
           done
+          if [ -z "$selected" ]; then
+            echo "Xcode 26.x is required for SpeechAnalyzer" >&2
+            ls -1 /Applications | grep '^Xcode' || true
+            exit 1
+          fi
+          echo "Selecting $selected"
+          sudo xcode-select -s "$selected/Contents/Developer"
           xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
 
       - name: Build LocalTranslate
         run: |
           xcodebuild -project LocalTranslate.xcodeproj \
             -scheme LocalTranslate \
             -configuration Release \
+            -destination 'generic/platform=macOS' \
             build \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
