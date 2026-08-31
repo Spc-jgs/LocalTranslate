@@ -3,7 +3,7 @@
 LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译、截图 OCR 翻译、系统音频实时字幕和 AI 用量看板放在同一个菜单栏 App 中。翻译与语音内容默认只发送到本机 Ollama。
 
 当前已发布版本：[v1.3.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.3.0)。
-仓库 `MARKETING_VERSION` 已推进到 1.4.0，对应 tag 尚未创建。
+仓库 `MARKETING_VERSION` 已推进到 1.5.0，对应 tag 尚未创建。
 
 ## 功能
 
