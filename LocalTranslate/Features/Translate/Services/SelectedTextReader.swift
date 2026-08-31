@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
-import ApplicationServices
+// kAXTrustedCheckOptionPrompt 在 SDK 里被声明为可变全局变量。
+@preconcurrency import ApplicationServices
 
 enum SelectedTextReader {
 

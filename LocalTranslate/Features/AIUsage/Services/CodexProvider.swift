@@ -415,7 +415,8 @@ private nonisolated struct CodexResponses {
     let hasError: Bool
     let statusMessage: String?
 
-    static let cancelled = CodexResponses(
+    // 字段是 [String: Any]，类型无法是 Sendable；该值本身不可变。
+    nonisolated(unsafe) static let cancelled = CodexResponses(
         account: [:],
         rateLimits: [:],
         usage: [:],
@@ -646,7 +647,8 @@ private nonisolated final class CodexAppServerRunner {
     }
 }
 
-private nonisolated final class LineReader {
+/// `readabilityHandler` 在任意线程回调；全部可变状态由 `condition` 保护。
+private nonisolated final class LineReader: @unchecked Sendable {
     private let handle: FileHandle
     private let condition = NSCondition()
     private var buffer = Data()

@@ -2,7 +2,9 @@ import Foundation
 
 nonisolated enum ShellResolver {
     private static let lock = NSLock()
-    private static var cache: [String: URL] = [:]
+    // 访问全部经 `lock` 串行化；`nonisolated(unsafe)` 只是把这个既有事实
+    // 告诉编译器，不改变运行时行为。
+    private nonisolated(unsafe) static var cache: [String: URL] = [:]
 
     static func resolve(_ executable: String) throws -> URL {
         lock.lock()
