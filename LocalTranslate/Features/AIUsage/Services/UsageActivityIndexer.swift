@@ -57,7 +57,7 @@ nonisolated final class UsageActivityIndexer: @unchecked Sendable {
     ) async throws -> IndexedActivitySnapshot {
         try await UsageScanExecutor.shared.submit(
             budget: .standard(
-                maximumBytes: 128 * 1024 * 1024,
+                maximumBytes: Int64(128 * 1024 * 1024),
                 seconds: 5
             )
         ) { cancellation, budget in
@@ -77,7 +77,7 @@ nonisolated final class UsageActivityIndexer: @unchecked Sendable {
         databaseURL: URL = UsageIndex.defaultDatabaseURL
     ) async throws -> IndexedActivitySnapshot {
         try await UsageScanExecutor.shared.submit(
-            budget: .standard(maximumBytes: 64 * 1024 * 1024, seconds: 2)
+            budget: .standard(maximumBytes: Int64(64 * 1024 * 1024), seconds: 2)
         ) { cancellation, budget in
             try withRecoveringUsageIndex(databaseURL: databaseURL) { index in
                 try ClaudeIncrementalIndexer(
@@ -95,7 +95,7 @@ nonisolated final class UsageActivityIndexer: @unchecked Sendable {
         databaseURL: URL = UsageIndex.defaultDatabaseURL
     ) async throws -> IndexedActivitySnapshot {
         try await UsageScanExecutor.shared.submit(
-            budget: .standard(maximumBytes: 16 * 1024 * 1024, seconds: 1)
+            budget: .standard(maximumBytes: Int64(16 * 1024 * 1024), seconds: 1)
         ) { cancellation, budget in
             try withRecoveringUsageIndex(databaseURL: databaseURL) { index in
                 try QwenIncrementalIndexer(
