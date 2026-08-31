@@ -19,7 +19,6 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     @Published public var subtitleHistory: [SubtitleItem] = []
     @Published public var showHistoryDrawer = false
     @Published public var errorMessage: String?
-    @Published public var isClickThrough = false
     @Published public var fontSize: CGFloat = AppSettings.defaultLiveFontSize
     @Published public var displayLag: TimeInterval = 0
     @Published public var isCatchingUp = false
@@ -80,7 +79,6 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         if AppSettings.liveFontSizeRange.contains(savedFontSize) {
             fontSize = savedFontSize
         }
-        isClickThrough = AppSettings.liveClickThrough
 
         speechRecognizer = LiveSpeechRecognizer(language: sourceLanguage)
         audioCaptureService.delegate = self
@@ -222,14 +220,6 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         UserDefaults.standard.set(
             Double(newSize),
             forKey: AppSettings.Key.liveFontSize
-        )
-    }
-
-    public func toggleClickThrough() {
-        isClickThrough.toggle()
-        UserDefaults.standard.set(
-            isClickThrough,
-            forKey: AppSettings.Key.liveClickThrough
         )
     }
 

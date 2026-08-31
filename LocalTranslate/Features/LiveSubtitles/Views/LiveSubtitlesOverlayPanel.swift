@@ -64,10 +64,6 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
         false
     }
 
-    public func setClickThrough(_ enabled: Bool) {
-        self.ignoresMouseEvents = enabled
-    }
-
     public func setHistoryExpanded(_ expanded: Bool) {
         let previousFrame = frame
         setContentSize(

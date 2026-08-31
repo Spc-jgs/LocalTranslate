@@ -74,15 +74,6 @@ private struct MenuBarContent: View {
             )
         }
 
-        // 点击穿透打开后，字幕条自己的工具条也不再接收鼠标事件，
-        // 菜单栏是唯一能关掉它的入口。
-        Button("切换字幕点击穿透") {
-            NotificationCenter.default.post(
-                name: .toggleLiveSubtitlesClickThrough,
-                object: nil
-            )
-        }
-
         Divider()
 
         Button {
@@ -310,18 +301,6 @@ final class AppDelegate:
                     .triggerMiniHUD,
                 object: nil
             )
-
-        NotificationCenter.default
-            .addObserver(
-                self,
-                selector:
-                    #selector(
-                        handleToggleClickThroughNotification
-                    ),
-                name:
-                    .toggleLiveSubtitlesClickThrough,
-                object: nil
-            )
     }
 
     func applicationWillTerminate(
@@ -466,13 +445,6 @@ final class AppDelegate:
         handleMiniHUDHotKey()
     }
 
-    @objc
-    private func handleToggleClickThroughNotification(
-        _ notification: Notification
-    ) {
-        LiveSubtitlesViewModel.shared.toggleClickThrough()
-    }
-
     // MARK: - Live Subtitles HotKey
 
     private func handleLiveSubtitlesHotKey() {
@@ -484,7 +456,6 @@ final class AppDelegate:
             overlay.orderOut(nil)
         } else {
             overlay.positionAtScreenBottom()
-            overlay.setClickThrough(vm.isClickThrough)
             overlay.makeKeyAndOrderFront(nil)
             overlay.orderFrontRegardless()
             vm.start()
@@ -1194,10 +1165,5 @@ extension Notification.Name {
     static let triggerMiniHUD =
         Notification.Name(
             "triggerMiniHUD"
-        )
-
-    static let toggleLiveSubtitlesClickThrough =
-        Notification.Name(
-            "toggleLiveSubtitlesClickThrough"
         )
 }

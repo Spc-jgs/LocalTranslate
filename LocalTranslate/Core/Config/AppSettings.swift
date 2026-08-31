@@ -20,7 +20,6 @@ nonisolated enum AppSettings {
         static let liveSourceLanguage = "liveSubtitlesSourceLanguage"
         static let liveDisplayMode = "liveSubtitlesDisplayMode"
         static let liveFontSize = "liveSubtitlesFontSize"
-        static let liveClickThrough = "liveSubtitlesClickThrough"
 
         // MARK: AI Usage
 
@@ -73,10 +72,4 @@ nonisolated enum AppSettings {
     static let defaultLiveFontSize: CGFloat = 26
     static let liveFontSizeRange: ClosedRange<CGFloat> = 16...34
     static let liveFontSizeStep: CGFloat = 2
-
-    static var liveClickThrough: Bool {
-        UserDefaults.standard.bool(
-            forKey: Key.liveClickThrough
-        )
-    }
 }

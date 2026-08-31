@@ -328,41 +328,6 @@ struct SettingsView: View {
                         .labelsHidden()
                     }
                 }
-
-                rowDivider
-
-                settingsRow(
-                    title: "点击穿透"
-                ) {
-
-                    Toggle(
-                        "",
-                        isOn: Binding(
-                            get: { liveSubtitles.isClickThrough },
-                            set: { newValue in
-                                guard newValue != liveSubtitles.isClickThrough
-                                else { return }
-                                liveSubtitles.toggleClickThrough()
-                            }
-                        )
-                    )
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                }
-
-                Text(
-                    "点击穿透开启后，字幕条把鼠标事件交给下层窗口，"
-                        + "它自己的工具条也不再响应点击；"
-                        + "可从这里或菜单栏关闭。"
-                )
-                .font(
-                    .system(size: 10)
-                )
-                .foregroundStyle(.tertiary)
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: .leading
-                )
             }
         }
     }

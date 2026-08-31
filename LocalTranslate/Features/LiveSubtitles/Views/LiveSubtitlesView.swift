@@ -91,9 +91,6 @@ public struct LiveSubtitlesView: View {
         .onHover { hovering in
             isHovering = hovering
         }
-        .onChange(of: viewModel.isClickThrough) { _, newValue in
-            LiveSubtitlesOverlayPanel.shared.setClickThrough(newValue)
-        }
         .onChange(of: viewModel.showHistoryDrawer) { _, isExpanded in
             LiveSubtitlesOverlayPanel.shared.setHistoryExpanded(isExpanded)
         }
@@ -192,22 +189,6 @@ public struct LiveSubtitlesView: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
             .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-
-            // 点击穿透：让鼠标事件落到下面的播放器
-            NativeIconButton(
-                systemName: viewModel.isClickThrough
-                    ? "cursorarrow.slash"
-                    : "cursorarrow",
-                tintColor: viewModel.isClickThrough
-                    ? .accentColor
-                    : .white.opacity(0.75),
-                helpText: viewModel.isClickThrough
-                    ? "恢复接收鼠标事件"
-                    : "点击穿透：鼠标事件交给下层窗口"
-                        + "（开启后请从菜单栏关闭）"
-            ) {
-                viewModel.toggleClickThrough()
-            }
 
             // 历史台词回溯抽屉
             NativeIconButton(
