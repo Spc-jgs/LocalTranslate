@@ -157,26 +157,53 @@ struct AIUsageView: View {
                     subtitle: "每个账号的限额窗口、剩余额度与重置时间"
                 )
 
-                LazyVGrid(
-                    columns: [
-                        GridItem(.adaptive(minimum: 300, maximum: 440), spacing: 12)
-                    ],
-                    spacing: 12
-                ) {
-                    ForEach(subscriptionAccounts) { account in
-                        QuotaAccountCard(
-                            account: account,
-                            isRefreshing: store.isRefreshing(providerID: account.id),
-                            onRefresh: {
-                                Task {
-                                    await store.refresh(providerID: account.id)
-                                }
+                // LazyVGrid 会把同一行的卡片拉到最高那张的高度：AGY 有 4 个额度
+                // 窗口、Claude 可能一个都没有，同行时矮的那张下方就是一大片空白。
+                // 两列各自独立堆叠即可，卡片保持自身高度。
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(
+                        Array(quotaColumns.enumerated()),
+                        id: \.offset
+                    ) { _, column in
+                        VStack(spacing: 12) {
+                            ForEach(column) { account in
+                                QuotaAccountCard(
+                                    account: account,
+                                    isRefreshing: store.isRefreshing(
+                                        providerID: account.id
+                                    ),
+                                    onRefresh: {
+                                        Task {
+                                            await store.refresh(
+                                                providerID: account.id
+                                            )
+                                        }
+                                    }
+                                )
                             }
-                        )
+                        }
+                        .frame(maxWidth: .infinity, alignment: .top)
                     }
                 }
             }
         }
+    }
+
+    /// 把订阅卡片分到两列，尽量让两列高度接近。
+    ///
+    /// 高度用「额度窗口数」估算：卡片主体就是窗口列表，没有窗口时是一行提示。
+    private var quotaColumns: [[AccountSnapshot]] {
+        var columns: [[AccountSnapshot]] = [[], []]
+        var estimatedHeights = [0, 0]
+
+        for account in subscriptionAccounts {
+            let target = estimatedHeights[0] <= estimatedHeights[1] ? 0 : 1
+            columns[target].append(account)
+            // 每个窗口约占一格，无窗口的提示卡按半格计。
+            estimatedHeights[target] += max(account.quotaWindows.count * 2, 1)
+        }
+
+        return columns.filter { !$0.isEmpty }
     }
 
     private var overviewSection: some View {
