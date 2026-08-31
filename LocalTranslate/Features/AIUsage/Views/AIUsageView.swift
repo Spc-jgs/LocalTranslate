@@ -640,7 +640,10 @@ private struct QuotaAccountCard: View {
             }
 
             if windows.isEmpty {
-                UnavailableQuotaRow(provider: account.provider)
+                UnavailableQuotaRow(
+                    provider: account.provider,
+                    hint: account.statusMessage
+                )
             } else {
                 LazyVGrid(
                     columns: [
@@ -671,6 +674,15 @@ private struct QuotaAccountCard: View {
 
 private struct UnavailableQuotaRow: View {
     let provider: ProviderKind
+    /// Provider 生成的可操作说明（例如提示去哪里刷新额度缓存）。
+    /// 此前它只存在于快照里，界面上从不展示，用户只看得到「暂无」。
+    var hint: String?
+
+    private var trimmedHint: String? {
+        guard let hint else { return nil }
+        let value = hint.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
@@ -688,6 +700,14 @@ private struct UnavailableQuotaRow: View {
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if let trimmedHint {
+                    Text(trimmedHint)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
             }
 
             Spacer(minLength: 0)
