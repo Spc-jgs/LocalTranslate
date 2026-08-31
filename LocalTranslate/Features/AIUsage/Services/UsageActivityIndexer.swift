@@ -1237,7 +1237,7 @@ private nonisolated func agyProgressCallback(
 }
 
 private nonisolated struct AGYIncrementalIndexer {
-    static let parserVersion = 4
+    static let parserVersion = 5
     static let rowsPerDatabase = 10_000
     static let totalRowLimit = 50_000
 
@@ -1450,6 +1450,53 @@ private nonisolated struct AGYIncrementalIndexer {
         return sqlite3_step(statement) == SQLITE_ROW
     }
 
+    /// `gen_metadata` 存 Token，`steps` 存事件时间，两表以 `idx` 一一对应。
+    ///
+    /// 只取 blob 前 64 字节：时间在 protobuf 路径 1.1，实测 1451 行样本中前 32
+    /// 字节即可全部解出，因此这次关联的读取量相对 `gen_metadata` 可以忽略。
+    private func loadStepTimestamps(
+        _ database: OpaquePointer,
+        afterRowID: Int64,
+        maximumRows: Int,
+        meter: inout UsageScanMeter
+    ) throws -> [Int64: Date] {
+        let sql =
+            """
+            SELECT idx, substr(metadata, 1, 64)
+            FROM steps
+            WHERE idx > ? AND metadata IS NOT NULL
+            ORDER BY idx
+            LIMIT ?
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return [:] }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, afterRowID)
+        sqlite3_bind_int(statement, 2, Int32(maximumRows + 1))
+
+        var timestamps: [Int64: Date] = [:]
+        while true {
+            try meter.check()
+            let step = sqlite3_step(statement)
+            if step == SQLITE_INTERRUPT { throw CancellationError() }
+            guard step == SQLITE_ROW else { break }
+
+            let rowID = sqlite3_column_int64(statement, 0)
+            guard let blob = sqlite3_column_blob(statement, 1) else { continue }
+            let size = Int(sqlite3_column_bytes(statement, 1))
+            guard size > 0 else { continue }
+            try meter.record(bytes: size)
+
+            if let date = AGYUsageProtoParser.stepTimestamp(
+                Data(bytes: blob, count: size)
+            ) {
+                timestamps[rowID] = date
+            }
+        }
+        return timestamps
+    }
+
     private func scanRecordedUsage(
         _ database: OpaquePointer,
         modificationDate: Date,
@@ -1457,6 +1504,12 @@ private nonisolated struct AGYIncrementalIndexer {
         meter: inout UsageScanMeter,
         maximumRows: Int
     ) throws -> (events: [IndexedUsageEvent], lastRowID: Int64, reachedEnd: Bool) {
+        let stepTimestamps = try loadStepTimestamps(
+            database,
+            afterRowID: afterRowID,
+            maximumRows: maximumRows,
+            meter: &meter
+        )
         let sql =
             """
             SELECT idx, data, coalesce(length(data), 0)
@@ -1510,15 +1563,16 @@ private nonisolated struct AGYIncrementalIndexer {
             let usage: TokenBreakdown
             let turns: Int
             let eventKey: String
-            if let recordedAt = record.occurredAt {
+            if let recordedAt = stepTimestamps[rowID] {
                 occurredAt = recordedAt
                 usage = record.usage
                 turns = record.usage.totalTokens > 0 ? 1 : 0
                 eventKey = record.responseID.map { "response::\($0)" }
                     ?? "idx::\(rowID)"
             } else {
-                // 新版 AGY 有时先写模型和 Token 计数、稍后才补事件时间。
-                // 未知时间的 Token 不能归到“今天”；只用数据库 mtime 发布零 Token 模型证据。
+                // 没有可验证的事件时间就不猜：一个会话库可以横跨多天，
+                // 按文件 mtime 摊派会把历史 Token 记到今天。此时只发布零 Token
+                // 的模型证据，等 steps 补齐后下一轮扫描再归日。
                 guard modelID != "agy-unknown" else { continue }
                 occurredAt = modificationDate
                 usage = TokenBreakdown()

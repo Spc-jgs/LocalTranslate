@@ -1,15 +1,17 @@
 import Foundation
 
 nonisolated struct AGYRecordedUsage: Sendable, Equatable {
-    let occurredAt: Date?
     let modelID: String?
     let modelLabel: String?
     let responseID: String?
     let usage: TokenBreakdown
 }
 
-/// 只解码 AGY `gen_metadata.data` 中已确认的模型与生成用量字段。
-/// 未知字段全部跳过；时间缺失时只返回模型证据，调用方不得把 Token 猜到某一天。
+/// 只解码 AGY 本机会话库中已确认的字段，未知字段全部跳过。
+///
+/// 职责边界：这里只负责「一段 blob 里有什么」。事件时间不在 `gen_metadata`
+/// 里——实测 1451 行样本中该表没有任何精度的事件时间戳；时间由 `steps.metadata`
+/// 提供，两表以 `idx` 一一对应，关联由 indexer 在 SQL 层完成。
 nonisolated enum AGYUsageProtoParser {
     private enum ParseError: Error {
         case malformed
@@ -26,8 +28,6 @@ nonisolated enum AGYUsageProtoParser {
 
     private struct ParsedTurn {
         var usage: ParsedUsage?
-        var seconds: UInt64?
-        var nanos: UInt64 = 0
         var modelID: String?
         var modelLabel: String?
     }
@@ -146,12 +146,10 @@ nonisolated enum AGYUsageProtoParser {
             ]) else {
                 return nil
             }
-            let occurredAt = try timestamp(seconds: turn.seconds, nanos: turn.nanos)
             guard input > 0 || output > 0 || turn.modelID != nil || turn.modelLabel != nil else {
                 return nil
             }
             return AGYRecordedUsage(
-                occurredAt: occurredAt,
                 modelID: turn.modelID,
                 modelLabel: turn.modelLabel,
                 responseID: rawUsage.responseID,
@@ -177,8 +175,6 @@ nonisolated enum AGYUsageProtoParser {
                 var usage = turn.usage ?? ParsedUsage()
                 try parseUsage(field.message(), into: &usage)
                 turn.usage = usage
-            case 9:
-                try parseGeneration(field.message(), into: &turn)
             case 19:
                 turn.modelID = try field.string()
             case 21:
@@ -206,25 +202,6 @@ nonisolated enum AGYUsageProtoParser {
         }
     }
 
-    private static func parseGeneration(
-        _ bytes: ArraySlice<UInt8>,
-        into turn: inout ParsedTurn
-    ) throws {
-        try visit(bytes) { generationField in
-            guard generationField.number == 4 else { return }
-            try visit(generationField.message()) { timestampField in
-                switch timestampField.number {
-                case 1:
-                    turn.seconds = try timestampField.unsignedInteger()
-                case 2:
-                    turn.nanos = try timestampField.unsignedInteger()
-                default:
-                    break
-                }
-            }
-        }
-    }
-
     private static func visit(
         _ bytes: ArraySlice<UInt8>,
         _ body: (Field) throws -> Void
@@ -237,16 +214,29 @@ nonisolated enum AGYUsageProtoParser {
         if reader.malformed { throw ParseError.malformed }
     }
 
-    private static func timestamp(seconds: UInt64?, nanos: UInt64) throws -> Date? {
-        guard let seconds else { return nil }
-        guard seconds > 0, seconds <= 253_402_300_799,
-              nanos <= 999_999_999,
-              let exactSeconds = Int64(exactly: seconds),
-              let exactNanos = Int64(exactly: nanos) else {
-            throw ParseError.malformed
+    /// 解析 `steps.metadata` 的事件时间（protobuf 路径 1.1，Unix 秒）。
+    ///
+    /// 只需要 blob 开头的几十字节：实测 1451 行样本中前 32 字节即可 100% 解出，
+    /// 因此调用方用 `substr(metadata, 1, 64)` 读取，不必载入整个 blob。
+    static func stepTimestamp(_ data: Data) -> Date? {
+        var seconds: UInt64?
+
+        // 只读前缀必然在中途截断，`visit` 会因此抛 malformed；那是预期结果，
+        // 不能连同已经读到的时间一起丢弃。
+        try? visit([UInt8](data)[...]) { field in
+            guard seconds == nil, field.number == 1, field.wireType == 2 else {
+                return
+            }
+            try? visit(field.message()) { inner in
+                guard inner.number == 1, inner.wireType == 0 else { return }
+                seconds = try? inner.unsignedInteger()
+            }
         }
-        let milliseconds = exactSeconds * 1_000 + exactNanos / 1_000_000
-        return Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1_000)
+
+        guard let seconds,
+              seconds > 1_600_000_000,
+              seconds < 4_102_444_800 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(seconds))
     }
 
     private static func checkedSum(_ values: [Int64]) -> Int64? {

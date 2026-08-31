@@ -301,7 +301,10 @@ struct AIUsageProviderFixtureTests {
             expect(
                 sqlite3_exec(
                     database,
-                    "CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);",
+                    """
+                    CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);
+                    CREATE TABLE steps(idx INTEGER PRIMARY KEY, metadata BLOB);
+                    """,
                     nil,
                     nil,
                     nil
@@ -406,7 +409,8 @@ struct AIUsageProviderFixtureTests {
                 sqlite3_exec(
                     database,
                     "PRAGMA journal_mode=WAL;"
-                        + "CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);",
+                        + "CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);"
+                        + "CREATE TABLE steps(idx INTEGER PRIMARY KEY, metadata BLOB);",
                     nil,
                     nil,
                     nil
@@ -709,13 +713,34 @@ struct AIUsageProviderFixtureTests {
             input: input,
             cacheRead: cacheRead,
             output: output,
-            reasoning: reasoning,
-            timestamp: timestamp
+            reasoning: reasoning
         )
         let hex = payload.map { String(format: "%02x", $0) }.joined()
-        return sqlite3_exec(
+        guard sqlite3_exec(
             database,
             "INSERT INTO gen_metadata(idx, data) VALUES(\(idx), X'\(hex)');",
+            nil,
+            nil,
+            nil
+        ) == SQLITE_OK else { return false }
+
+        // 事件时间在 steps 表，与 gen_metadata 按 idx 一一对应。
+        return insertAGYStepTime(database, idx: idx, timestamp: timestamp)
+    }
+
+    /// steps.metadata 的 protobuf 路径 1.1 是事件时间（Unix 秒）。
+    private static func insertAGYStepTime(
+        _ database: OpaquePointer?,
+        idx: Int,
+        timestamp: Int64
+    ) -> Bool {
+        var occurredAt = Data()
+        occurredAt.append(protoCounter(field: 1, value: timestamp))
+        let metadata = protoMessage(field: 1, payload: occurredAt)
+        let hex = metadata.map { String(format: "%02x", $0) }.joined()
+        return sqlite3_exec(
+            database,
+            "INSERT INTO steps(idx, metadata) VALUES(\(idx), X'\(hex)');",
             nil,
             nil,
             nil
@@ -747,8 +772,7 @@ struct AIUsageProviderFixtureTests {
         input: Int64,
         cacheRead: Int64,
         output: Int64,
-        reasoning: Int64,
-        timestamp: Int64
+        reasoning: Int64
     ) -> Data {
         var usage = Data()
         usage.append(protoCounter(field: 2, value: input))
@@ -757,15 +781,8 @@ struct AIUsageProviderFixtureTests {
         usage.append(protoCounter(field: 10, value: reasoning))
         usage.append(protoString(field: 11, value: "response-\(idx)"))
 
-        var recordedAt = Data()
-        recordedAt.append(protoCounter(field: 1, value: timestamp))
-
-        var generation = Data()
-        generation.append(protoMessage(field: 4, payload: recordedAt))
-
         var chat = Data()
         chat.append(protoMessage(field: 4, payload: usage))
-        chat.append(protoMessage(field: 9, payload: generation))
         chat.append(protoString(field: 19, value: model))
         chat.append(protoString(field: 21, value: model))
         return protoMessage(field: 1, payload: chat)
