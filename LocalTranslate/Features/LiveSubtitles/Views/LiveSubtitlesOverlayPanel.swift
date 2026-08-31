@@ -5,11 +5,13 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
 
     public static let shared = LiveSubtitlesOverlayPanel()
 
+    private var screenObserver: (any NSObjectProtocol)?
+
     private init() {
-        let screenWidth = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame.width
-            ?? 1_440
-        let width = min(max(screenWidth * 0.72, 720), 980)
-        let size = NSSize(width: width, height: 124)
+        let size = NSSize(
+            width: LiveSubtitlesOverlayLayout.width(for: nil),
+            height: LiveSubtitlesOverlayLayout.compactHeight
+        )
 
         let hostingView = NSHostingView(
             rootView: LiveSubtitlesView()
@@ -45,6 +47,13 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
         self.animationBehavior = .none
 
         positionAtScreenBottom()
+        observeScreenChanges()
+    }
+
+    deinit {
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+        }
     }
 
     public override var canBecomeKey: Bool {
@@ -61,8 +70,14 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
 
     public func setHistoryExpanded(_ expanded: Bool) {
         let previousFrame = frame
-        let height: CGFloat = expanded ? 250 : 124
-        setContentSize(NSSize(width: previousFrame.width, height: height))
+        setContentSize(
+            NSSize(
+                width: previousFrame.width,
+                height: LiveSubtitlesOverlayLayout.height(
+                    historyExpanded: expanded
+                )
+            )
+        )
         setFrameOrigin(
             NSPoint(
                 x: previousFrame.midX - frame.width / 2,
@@ -78,11 +93,74 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
         }
 
         let visibleFrame = screen.visibleFrame
-        let panelSize = self.frame.size
 
-        let x = visibleFrame.midX - panelSize.width / 2
-        let y = visibleFrame.minY + 50 // 距离屏幕底部 50pt
+        setContentSize(
+            NSSize(
+                width: LiveSubtitlesOverlayLayout.width(for: screen),
+                height: frame.height
+            )
+        )
 
-        self.setFrameOrigin(NSPoint(x: x, y: y))
+        self.setFrameOrigin(
+            NSPoint(
+                x: visibleFrame.midX - frame.width / 2,
+                y: visibleFrame.minY + LiveSubtitlesOverlayLayout.bottomInset
+            )
+        )
+    }
+
+    /// 分辨率变化、插拔外接显示器都会改变可用宽度。宽度原先只在单例
+    /// 初始化时按 `NSScreen.main` 算一次，之后整个进程都不再更新。
+    private func observeScreenChanges() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.adjustToCurrentScreen()
+            }
+        }
+    }
+
+    private func adjustToCurrentScreen() {
+        let screen = self.screen ?? NSScreen.main ?? NSScreen.screens.first
+        let width = LiveSubtitlesOverlayLayout.width(for: screen)
+
+        guard abs(frame.width - width) >= 1 else {
+            keepInsideScreen(screen)
+            return
+        }
+
+        let previousCenterX = frame.midX
+        setContentSize(
+            NSSize(width: width, height: frame.height)
+        )
+        setFrameOrigin(
+            NSPoint(
+                x: previousCenterX - width / 2,
+                y: frame.minY
+            )
+        )
+        keepInsideScreen(screen)
+    }
+
+    private func keepInsideScreen(_ screen: NSScreen?) {
+        guard let screen else { return }
+
+        let visibleFrame = screen.visibleFrame
+        var origin = frame.origin
+
+        origin.x = min(
+            max(origin.x, visibleFrame.minX),
+            max(visibleFrame.maxX - frame.width, visibleFrame.minX)
+        )
+        origin.y = min(
+            max(origin.y, visibleFrame.minY),
+            max(visibleFrame.maxY - frame.height, visibleFrame.minY)
+        )
+
+        guard origin != frame.origin else { return }
+        setFrameOrigin(origin)
     }
 }

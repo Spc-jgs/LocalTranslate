@@ -20,7 +20,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     @Published public var showHistoryDrawer = false
     @Published public var errorMessage: String?
     @Published public var isClickThrough = false
-    @Published public var fontSize: CGFloat = 26
+    @Published public var fontSize: CGFloat = AppSettings.defaultLiveFontSize
     @Published public var displayLag: TimeInterval = 0
     @Published public var isCatchingUp = false
     @Published public var isPreparing = false
@@ -63,21 +63,24 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
     private init() {
         if let savedLanguage = UserDefaults.standard.string(
-            forKey: "liveSubtitlesSourceLanguage"
+            forKey: AppSettings.Key.liveSourceLanguage
         ), let language = SubtitleSourceLanguage(rawValue: savedLanguage) {
             sourceLanguage = language
         }
         if let savedMode = UserDefaults.standard.string(
-            forKey: "liveSubtitlesDisplayMode"
+            forKey: AppSettings.Key.liveDisplayMode
         ), let mode = SubtitleDisplayMode(rawValue: savedMode) {
             displayMode = mode
         }
-        let savedFontSize = UserDefaults.standard.double(
-            forKey: "liveSubtitlesFontSize"
+        let savedFontSize = CGFloat(
+            UserDefaults.standard.double(
+                forKey: AppSettings.Key.liveFontSize
+            )
         )
-        if savedFontSize >= 16, savedFontSize <= 34 {
-            fontSize = CGFloat(savedFontSize)
+        if AppSettings.liveFontSizeRange.contains(savedFontSize) {
+            fontSize = savedFontSize
         }
+        isClickThrough = AppSettings.liveClickThrough
 
         speechRecognizer = LiveSpeechRecognizer(language: sourceLanguage)
         audioCaptureService.delegate = self
@@ -173,7 +176,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         sourceLanguage = language
         UserDefaults.standard.set(
             language.rawValue,
-            forKey: "liveSubtitlesSourceLanguage"
+            forKey: AppSettings.Key.liveSourceLanguage
         )
         resetPipelineSession()
         translationService.cancel()
@@ -205,17 +208,37 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         displayMode = mode
         UserDefaults.standard.set(
             mode.rawValue,
-            forKey: "liveSubtitlesDisplayMode"
+            forKey: AppSettings.Key.liveDisplayMode
         )
     }
 
     public func adjustFontSize(delta: CGFloat) {
-        let newSize = min(max(fontSize + delta, 16), 34)
+        let range = AppSettings.liveFontSizeRange
+        let newSize = min(
+            max(fontSize + delta, range.lowerBound),
+            range.upperBound
+        )
         fontSize = newSize
         UserDefaults.standard.set(
             Double(newSize),
-            forKey: "liveSubtitlesFontSize"
+            forKey: AppSettings.Key.liveFontSize
         )
+    }
+
+    public func toggleClickThrough() {
+        isClickThrough.toggle()
+        UserDefaults.standard.set(
+            isClickThrough,
+            forKey: AppSettings.Key.liveClickThrough
+        )
+    }
+
+    public var canDecreaseFontSize: Bool {
+        fontSize > AppSettings.liveFontSizeRange.lowerBound
+    }
+
+    public var canIncreaseFontSize: Bool {
+        fontSize < AppSettings.liveFontSizeRange.upperBound
     }
 
     public func toggleHistoryDrawer() {

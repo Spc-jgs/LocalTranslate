@@ -13,7 +13,10 @@ public struct LiveSubtitlesView: View {
         ZStack(alignment: .center) {
             // The caption always owns a contrast surface. Relying on shadows
             // alone makes text unreadable over bright interview footage.
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(
+                cornerRadius: LiveSubtitlesOverlayLayout.cornerRadius,
+                style: .continuous
+            )
                 .fill(
                     Color.black.opacity(
                         isHovering || !viewModel.isRunning || viewModel.showHistoryDrawer
@@ -23,10 +26,16 @@ public struct LiveSubtitlesView: View {
                 )
                 .background(
                     AnyShapeStyle(.ultraThinMaterial),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    in: RoundedRectangle(
+                        cornerRadius: LiveSubtitlesOverlayLayout.cornerRadius,
+                        style: .continuous
+                    )
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(
+                        cornerRadius: LiveSubtitlesOverlayLayout.cornerRadius,
+                        style: .continuous
+                    )
                         .stroke(
                             Color.white.opacity(
                                 isHovering || !viewModel.isRunning || viewModel.showHistoryDrawer
@@ -61,10 +70,15 @@ public struct LiveSubtitlesView: View {
                 Spacer()
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(
+            RoundedRectangle(
+                cornerRadius: LiveSubtitlesOverlayLayout.cornerRadius,
+                style: .continuous
+            )
+        )
         .frame(
-            width: overlayWidth,
-            height: viewModel.showHistoryDrawer ? 250 : 124
+            maxWidth: .infinity,
+            maxHeight: .infinity
         )
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.15),
@@ -150,8 +164,14 @@ public struct LiveSubtitlesView: View {
 
             // 字号微调
             HStack(spacing: 2) {
-                NativeIconButton(systemName: "textformat.size.smaller", helpText: "减小字号") {
-                    viewModel.adjustFontSize(delta: -2)
+                NativeIconButton(
+                    systemName: "textformat.size.smaller",
+                    helpText: "减小字号",
+                    isEnabled: viewModel.canDecreaseFontSize
+                ) {
+                    viewModel.adjustFontSize(
+                        delta: -AppSettings.liveFontSizeStep
+                    )
                 }
 
                 Text("\(Int(viewModel.fontSize))")
@@ -159,13 +179,35 @@ public struct LiveSubtitlesView: View {
                     .foregroundColor(.white.opacity(0.8))
                     .frame(width: 18)
 
-                NativeIconButton(systemName: "textformat.size.larger", helpText: "增大字号") {
-                    viewModel.adjustFontSize(delta: 2)
+                NativeIconButton(
+                    systemName: "textformat.size.larger",
+                    helpText: "增大字号",
+                    isEnabled: viewModel.canIncreaseFontSize
+                ) {
+                    viewModel.adjustFontSize(
+                        delta: AppSettings.liveFontSizeStep
+                    )
                 }
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
             .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+
+            // 点击穿透：让鼠标事件落到下面的播放器
+            NativeIconButton(
+                systemName: viewModel.isClickThrough
+                    ? "cursorarrow.slash"
+                    : "cursorarrow",
+                tintColor: viewModel.isClickThrough
+                    ? .accentColor
+                    : .white.opacity(0.75),
+                helpText: viewModel.isClickThrough
+                    ? "恢复接收鼠标事件"
+                    : "点击穿透：鼠标事件交给下层窗口"
+                        + "（开启后请从菜单栏关闭）"
+            ) {
+                viewModel.toggleClickThrough()
+            }
 
             // 历史台词回溯抽屉
             NativeIconButton(
@@ -255,7 +297,7 @@ public struct LiveSubtitlesView: View {
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .frame(maxWidth: 600)
+                    .frame(maxWidth: LiveSubtitlesOverlayLayout.captionMaximumWidth)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
                     .background(
@@ -273,7 +315,7 @@ public struct LiveSubtitlesView: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .truncationMode(.head)
-                    .frame(maxWidth: min(overlayWidth - 80, 840))
+                    .frame(maxWidth: LiveSubtitlesOverlayLayout.sourceLineMaximumWidth)
                     .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
             }
         }
@@ -340,6 +382,15 @@ public struct LiveSubtitlesView: View {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
                     }
+                    // 抽屉打开期间新字幕会不断追加，不跟随就得手动往下拖。
+                    .onChange(of: viewModel.subtitleHistory.count) { _, _ in
+                        guard let last = viewModel.subtitleHistory.last else {
+                            return
+                        }
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
                 }
             }
         }
@@ -367,12 +418,6 @@ public struct LiveSubtitlesView: View {
     }
 
     // MARK: - Helpers
-
-    private var overlayWidth: CGFloat {
-        let screenWidth = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame.width
-            ?? 1_440
-        return min(max(screenWidth * 0.72, 720), 980)
-    }
 
     private var primaryCaptionText: String {
         if viewModel.displayMode == .originalOnly {
@@ -418,6 +463,7 @@ private struct NativeIconButton: View {
     let systemName: String
     var tintColor: Color = .white.opacity(0.75)
     var helpText: String = ""
+    var isEnabled: Bool = true
     let action: () -> Void
 
     @State private var isHovered = false
@@ -426,15 +472,22 @@ private struct NativeIconButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(tintColor)
+                .foregroundColor(
+                    isEnabled ? tintColor : tintColor.opacity(0.35)
+                )
                 .frame(width: 22, height: 22)
                 .background(
-                    isHovered ? Color.white.opacity(0.12) : Color.clear,
+                    isHovered && isEnabled
+                        ? Color.white.opacity(0.12)
+                        : Color.clear,
                     in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                 )
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
         .help(helpText)
+        // 工具条全是纯图标按钮，没有标签时 VoiceOver 只会读出 "按钮"。
+        .accessibilityLabel(Text(helpText))
         .onHover { isHovered = $0 }
     }
 }
