@@ -11,13 +11,14 @@ struct LiveSubtitlePipelineStateTests {
         plannerPrefersSemanticPunctuation()
         plannerUsesBoundedLookaheadWithoutPunctuation()
         plannerWaitsForUnsafeTrailingWord()
+        plannerHoldsWhenEveryBoundaryIsUnsafe()
         silenceFlushesTheStableTail()
         plannerNeverDropsOrDuplicatesWords()
         previewReadinessRejectsIncompletePhrases()
         compatiblePreviewGrowthRetainsDisplayedTranslation()
         requestRevisionAndRangeRejectStaleKey()
         finalIdentityRejectsDuplicateAndOldSession()
-        print("LiveSubtitlePipelineStateTests: 14 passed")
+        print("LiveSubtitlePipelineStateTests: 15 passed")
     }
 
     private static func volatileRangeReplacesInsteadOfAppending() {
@@ -175,22 +176,31 @@ struct LiveSubtitlePipelineStateTests {
     }
 
     private static func plannerUsesBoundedLookaheadWithoutPunctuation() {
+        // 上限跟随 `LiveTranslationWindowPlanner.drain` 的默认 maximumWords。
+        // 该默认值在「恢复低延迟同传」中由 16 降到 12；这里断言的是
+        // 「有界且保留前瞻」这个不变量，不是某个具体数字。
+        let maximumWords = 12
+
         var planner = LiveTranslationWindowPlanner()
         let source = words(1...18)
         planner.append(finalizedSpans: [span(source, start: 0, duration: 5.4)])
         let windows = planner.drain()
         expect(windows.count == 1, "long speech must not wait for punctuation forever")
         expect(
-            windows[0].sourceText == words(1...16),
-            "normal window must remain within sixteen words"
+            windows[0].sourceText == words(1...maximumWords),
+            "normal window must remain within the planner word budget"
         )
         expect(
-            planner.pendingSourceText == words(17...18),
-            "two finalized lookahead words must not be consumed"
+            planner.pendingSourceText == words((maximumWords + 1)...18),
+            "finalized lookahead words must not be consumed"
         )
     }
 
     private static func plannerWaitsForUnsafeTrailingWord() {
+        // 这里断言的是契约本身：窗口可以在从句边界切开，但绝不能停在
+        // 短语动词、连词这类明显未闭合的尾词上。原先写死「drain 必须为空」，
+        // 依赖的是 lookaheadWords = 2 时可切位置恰好落在 "set" 上；
+        // 前瞻收窄到 1 之后该 fixture 不再构造出那个场景，但不变量未变。
         var planner = LiveTranslationWindowPlanner()
         planner.append(finalizedSpans: [
             span(
@@ -199,9 +209,33 @@ struct LiveSubtitlePipelineStateTests {
                 duration: 3
             )
         ])
+
+        let windows = planner.drain()
+        expect(
+            windows.allSatisfy { window in
+                guard let tail = window.sourceText
+                    .split(whereSeparator: \Character.isWhitespace)
+                    .last else { return false }
+                return LivePreviewStabilityPolicy.hasSafeTrailingWord(String(tail))
+            },
+            "window must never end on a phrase head"
+        )
+    }
+
+    private static func plannerHoldsWhenEveryBoundaryIsUnsafe() {
+        // 所有候选边界都是不安全尾词时，planner 必须继续等待，
+        // 而不是为了低延迟切出半截短语。
+        var planner = LiveTranslationWindowPlanner()
+        planner.append(finalizedSpans: [
+            span(
+                "we think this really matters and turn the will be",
+                start: 0,
+                duration: 3
+            )
+        ])
         expect(
             planner.drain().isEmpty,
-            "window must wait when its only eligible boundary ends with a phrase head"
+            "planner must wait when every eligible boundary is a phrase head"
         )
     }
 

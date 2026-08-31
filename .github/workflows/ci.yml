@@ -34,6 +34,9 @@ jobs:
           xcodebuild -version
           xcrun --sdk macosx --show-sdk-version
 
+      - name: Run state tests
+        run: ./Scripts/run-state-tests.sh
+
       - name: Build LocalTranslate
         run: |
           xcodebuild -project LocalTranslate.xcodeproj \
