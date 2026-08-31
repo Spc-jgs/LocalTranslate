@@ -158,7 +158,7 @@ final class AppDelegate:
         MiniHUDViewModel()
 
     private var lastPanelHeight:
-        CGFloat = 390
+        CGFloat = TranslatePanelLayout.baseHeight
 
     // MARK: - Launch
 
@@ -179,8 +179,10 @@ final class AppDelegate:
                     ),
                 size:
                     NSSize(
-                        width: 520,
-                        height: 390
+                        width:
+                            TranslatePanelLayout.panelWidth,
+                        height:
+                            TranslatePanelLayout.baseHeight
                     )
             )
 
@@ -206,7 +208,7 @@ final class AppDelegate:
             miniHUD
 
         lastPanelHeight =
-            390
+            TranslatePanelLayout.baseHeight
 
         observeContentSize()
         observeMiniHUDContentSize()
@@ -909,24 +911,14 @@ final class AppDelegate:
             return
         }
 
-        var height: CGFloat = 36 + 32 + 24 // header + footer + vertical margins
-
-        if !original.isEmpty {
-            let origLines = min(estimatedLines(for: original, charactersPerLine: 40), 2)
-            height += CGFloat(origLines) * 16 + 18
-        }
-
-        if loading && translated.isEmpty {
-            height += 46
-        } else if !translated.isEmpty {
-            let lines = estimatedLines(for: translated, charactersPerLine: 28)
-            let textHeight = min(max(CGFloat(lines) * 23 + 12, 44), 320)
-            height += textHeight
-        } else {
-            height += 46
-        }
-
-        miniHUDPanel.updateHeight(min(max(height, 140), 450), animated: false)
+        miniHUDPanel.updateHeight(
+            MiniHUDLayout.panelHeight(
+                original: original,
+                translated: translated,
+                isTranslating: loading
+            ),
+            animated: false
+        )
     }
 
     private func updatePanelSize(
@@ -939,111 +931,37 @@ final class AppDelegate:
             return
         }
 
-        // MARK: Original
-
-        let originalLines =
-            estimatedLines(
-                for: original,
-                charactersPerLine: 55
+        // 高度与 ContentView 共用 TranslatePanelLayout，两者不会再各自漂移。
+        var desiredHeight =
+            TranslatePanelLayout.panelHeight(
+                original: original,
+                translated: translated,
+                isTranslating: loading
             )
 
-        let visibleOriginalLines =
-            min(
-                max(
-                    originalLines,
-                    3
-                ),
-                7
-            )
-
-        let originalExtraLines =
-            max(
-                visibleOriginalLines
-                - 3,
-                0
-            )
-
-        let originalExtraHeight =
-            CGFloat(
-                originalExtraLines
-            ) * 19
-
-        // MARK: Translation
-
-        let translationExtraHeight:
-            CGFloat
-
+        // 流式期间只增不减：每个 token 都重新排版会让窗口来回抖。
         if loading {
-
-            // Streaming 阶段保持固定，
-            // 避免 token 更新造成窗口闪动。
-            translationExtraHeight =
-                88
-
-        } else if translated.isEmpty {
-
-            translationExtraHeight =
-                0
-
-        } else {
-
-            let translationLines =
-                estimatedLines(
-                    for: translated,
-                    charactersPerLine: 29
-                )
-
-            let visibleTranslationLines =
-                min(
-                    max(
-                        translationLines,
-                        3
-                    ),
-                    9
-                )
-
-            let translationExtraLines =
+            desiredHeight =
                 max(
-                    visibleTranslationLines
-                    - 3,
-                    0
+                    desiredHeight,
+                    lastPanelHeight
                 )
-
-            translationExtraHeight =
-                CGFloat(
-                    translationExtraLines
-                ) * 24
         }
-
-        // MARK: Desired Height
-
-        let baseHeight:
-            CGFloat = 390
-
-        let desiredHeight =
-            baseHeight
-            + originalExtraHeight
-            + translationExtraHeight
-
-        // MARK: Screen-Aware Maximum
 
         let screen =
             panel.screen
             ??
             currentScreen()
 
-        let screenMaximum =
-            maximumPanelHeight(
-                on: screen
-            )
-
         let finalHeight =
             min(
                 max(
                     desiredHeight,
-                    390
+                    TranslatePanelLayout.baseHeight
                 ),
-                screenMaximum
+                maximumPanelHeight(
+                    on: screen
+                )
             )
 
         guard
@@ -1063,52 +981,6 @@ final class AppDelegate:
             toHeight:
                 finalHeight
         )
-    }
-
-    // MARK: - Line Estimate
-
-    private func estimatedLines(
-        for text: String,
-        charactersPerLine: Int
-    ) -> Int {
-
-        guard !text.isEmpty else {
-            return 1
-        }
-
-        return text
-            .components(
-                separatedBy:
-                    .newlines
-            )
-            .reduce(0) {
-                result,
-                line in
-
-                let length =
-                    max(
-                        line.count,
-                        1
-                    )
-
-                let lines =
-                    Int(
-                        ceil(
-                            Double(length)
-                            /
-                            Double(
-                                charactersPerLine
-                            )
-                        )
-                    )
-
-                return
-                    result
-                    + max(
-                        lines,
-                        1
-                    )
-            }
     }
 
     // MARK: - Resize

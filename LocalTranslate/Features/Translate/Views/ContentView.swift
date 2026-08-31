@@ -42,30 +42,19 @@ struct ContentView: View {
         ) ?? .standard
     }
 
-    // MARK: - Input Height
+    // MARK: - Measured Heights
 
     private var inputHeight: CGFloat {
-        let lines = estimatedOriginalLines(viewModel.originalText)
-        let visibleLines = min(max(lines, 3), 7)
-        let baseHeight: CGFloat = 68
-        let extraLines = max(visibleLines - 3, 0)
-        return baseHeight + CGFloat(extraLines) * 18
+        TranslatePanelLayout.inputHeight(
+            for: viewModel.originalText
+        )
     }
 
-    // MARK: - Translation Height
-
     private var translationHeight: CGFloat {
-        if viewModel.isTranslating && viewModel.translatedText.isEmpty {
-            return 90
-        }
-
-        guard !viewModel.translatedText.isEmpty else {
-            return 75
-        }
-
-        let lines = estimatedTranslationLines(viewModel.translatedText)
-        let calculated = CGFloat(lines) * 23 + 20
-        return min(max(calculated, 75), 230)
+        TranslatePanelLayout.translationHeight(
+            for: viewModel.translatedText,
+            isTranslating: viewModel.isTranslating
+        )
     }
 
     var body: some View {
@@ -233,7 +222,7 @@ struct ContentView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 13))
             .lineSpacing(3)
-            .lineLimit(7)
+            .lineLimit(TranslatePanelLayout.inputMaximumLines)
             .frame(height: inputHeight, alignment: .topLeading)
             .padding(10)
             .background {
@@ -450,26 +439,6 @@ struct ContentView: View {
                 .tracking(0.7)
         }
         .foregroundStyle(.tertiary)
-    }
-
-    // MARK: - Line Estimate
-
-    private func estimatedOriginalLines(_ text: String) -> Int {
-        guard !text.isEmpty else { return 1 }
-        return text.components(separatedBy: .newlines).reduce(0) { result, line in
-            let count = max(line.count, 1)
-            let lines = Int(ceil(Double(count) / 55.0))
-            return result + max(lines, 1)
-        }
-    }
-
-    private func estimatedTranslationLines(_ text: String) -> Int {
-        guard !text.isEmpty else { return 2 }
-        return text.components(separatedBy: .newlines).reduce(0) { result, line in
-            let count = max(line.count, 1)
-            let lines = Int(ceil(Double(count) / 29.0))
-            return result + max(lines, 1)
-        }
     }
 }
 

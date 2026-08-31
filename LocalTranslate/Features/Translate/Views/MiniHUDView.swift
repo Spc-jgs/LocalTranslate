@@ -18,24 +18,10 @@ struct MiniHUDView: View {
     }
 
     private var translationHeight: CGFloat {
-        if viewModel.isTranslating && viewModel.translatedText.isEmpty {
-            return 36
-        }
-        guard !viewModel.translatedText.isEmpty else {
-            return 36
-        }
-        let lines = estimatedLines(for: viewModel.translatedText, charactersPerLine: 28)
-        let calculated = CGFloat(lines) * 23 + 12
-        return min(max(calculated, 36), 340)
-    }
-
-    private func estimatedLines(for text: String, charactersPerLine: Int) -> Int {
-        guard !text.isEmpty else { return 1 }
-        return text.components(separatedBy: .newlines).reduce(0) { result, line in
-            let count = max(line.count, 1)
-            let lines = Int(ceil(Double(count) / Double(charactersPerLine)))
-            return result + max(lines, 1)
-        }
+        MiniHUDLayout.translationHeight(
+            for: viewModel.translatedText,
+            isTranslating: viewModel.isTranslating
+        )
     }
 
     var body: some View {
@@ -52,7 +38,7 @@ struct MiniHUDView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         }
-        .frame(width: 420)
+        .frame(width: MiniHUDLayout.panelWidth)
     }
 
     // MARK: - Header
@@ -139,7 +125,7 @@ struct MiniHUDView: View {
                 Text(viewModel.originalText)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(MiniHUDLayout.originalMaximumLines)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .frame(maxWidth: .infinity, alignment: .leading)
