@@ -88,8 +88,7 @@ final class ScreenshotOCRService {
 
     /// 基于系统 screencapture 的非阻塞异步截图 (匹配 Easydict 工业级实现)
     private func takeInteractiveScreenshot() async -> NSImage? {
-        let fileManager = FileManager.default
-        let temporaryPath = fileManager.temporaryDirectory
+        let temporaryPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("ocr_cap_\(UUID().uuidString)")
             .appendingPathExtension("png")
             .path
@@ -102,14 +101,17 @@ final class ScreenshotOCRService {
 
             process.terminationHandler = { _ in
                 DispatchQueue.main.async {
-                    if fileManager.fileExists(atPath: temporaryPath) {
-                        if let image = NSImage(contentsOfFile: temporaryPath) {
-                            try? fileManager.removeItem(atPath: temporaryPath)
-                            continuation.resume(returning: image)
-                            return
-                        }
+                    // 读取失败时同样要清理，否则截图会留在临时目录里，
+                    // 与「截图读取后即删除」的隐私承诺不符。
+                    defer {
+                        try? FileManager.default.removeItem(
+                            atPath: temporaryPath
+                        )
                     }
-                    continuation.resume(returning: nil)
+
+                    continuation.resume(
+                        returning: NSImage(contentsOfFile: temporaryPath)
+                    )
                 }
             }
 
