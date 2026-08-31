@@ -2,8 +2,7 @@
 
 LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译、截图 OCR 翻译、系统音频实时字幕和 AI 用量看板放在同一个菜单栏 App 中。翻译与语音内容默认只发送到本机 Ollama。
 
-当前已发布版本：[v1.3.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.3.0)。
-仓库 `MARKETING_VERSION` 已推进到 1.5.0，对应 tag 尚未创建。
+当前已发布版本：[v1.5.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.5.0)
 
 ## 功能
 
@@ -103,6 +102,8 @@ ollama serve
 ## 已知限制
 
 - v1.2.0 已优先解决 partial/final 混合、源转录重复、stale response 覆盖和字幕全文闪烁。
+- v1.5.0 修复 AGY 用量的事件时间来源：Token 此前因时间戳解析落空而无法归入当日，
+  现按会话库 `steps` 表的事件时间归日。
 - 快速访谈与长句场景仍可能感知约 2 秒端到端时差，后续优化记录在 [Issue #3](https://github.com/Spc-jgs/LocalTranslate/issues/3)。优化不会以恢复全文跳变或修改 committed 字幕为代价。
 - Release 产物尚未做 Developer ID 签名与 Apple notarization。
 
