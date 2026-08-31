@@ -1,6 +1,6 @@
 import Foundation
 
-enum TranslationStyle: String, CaseIterable, Identifiable, Codable {
+nonisolated enum TranslationStyle: String, CaseIterable, Identifiable, Codable {
 
     case standard
     case natural

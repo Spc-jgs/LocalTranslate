@@ -467,22 +467,11 @@ public final class LiveTranslationService {
     }
 
     private func makeURL(path: String) throws -> URL {
-        var baseURL = AppSettings.baseURL
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-
-        if baseURL.hasPrefix("http://localhost:") {
-            baseURL = baseURL.replacingOccurrences(
-                of: "http://localhost:",
-                with: "http://127.0.0.1:"
-            )
-        } else if baseURL == "http://localhost" {
-            baseURL = "http://127.0.0.1"
-        }
-        guard let url = URL(string: baseURL + path) else {
+        do {
+            return try OllamaEndpoint.url(path: path)
+        } catch {
             throw ServiceError.invalidURL
         }
-        return url
     }
 
     private func systemPrompt(for sourceLanguage: SubtitleSourceLanguage) -> String {
@@ -560,7 +549,7 @@ public final class LiveTranslationService {
         baseURL: String,
         keepAlive: String
     ) async {
-        let base = normalizedBaseURL(baseURL)
+        let base = OllamaEndpoint.normalizedBase(baseURL)
         guard let url = URL(string: base + "/api/generate") else { return }
         var request = URLRequest(url: url, timeoutInterval: 8)
         request.httpMethod = "POST"
@@ -577,7 +566,7 @@ public final class LiveTranslationService {
     }
 
     private nonisolated static func unloadModel(_ model: String, baseURL: String) async {
-        let base = normalizedBaseURL(baseURL)
+        let base = OllamaEndpoint.normalizedBase(baseURL)
         guard let url = URL(string: base + "/api/generate") else { return }
         var request = URLRequest(url: url, timeoutInterval: 5)
         request.httpMethod = "POST"
@@ -588,13 +577,4 @@ public final class LiveTranslationService {
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    private nonisolated static func normalizedBaseURL(_ baseURL: String) -> String {
-        baseURL
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            .replacingOccurrences(
-                of: "http://localhost:",
-                with: "http://127.0.0.1:"
-            )
-    }
 }

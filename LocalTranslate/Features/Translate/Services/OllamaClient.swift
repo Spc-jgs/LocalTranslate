@@ -1180,42 +1180,15 @@ final class OllamaClient {
         path: String
     ) throws -> URL {
 
-        var baseURL =
-            AppSettings.baseURL
-                .trimmingCharacters(
-                    in:
-                        .whitespacesAndNewlines
-                )
-                .trimmingCharacters(
-                    in:
-                        CharacterSet(
-                            charactersIn:
-                                "/"
-                        )
-                )
-
-        // 统一将 localhost 映射为 127.0.0.1，避免 macOS URLSession 优先解析 IPv6 (::1) 导致 Connection Refused
-        if baseURL.hasPrefix("http://localhost:") {
-            baseURL = baseURL.replacingOccurrences(of: "http://localhost:", with: "http://127.0.0.1:")
-        } else if baseURL == "http://localhost" {
-            baseURL = "http://127.0.0.1"
-        }
-
-        guard
-            let url =
-                URL(
-                    string:
-                        baseURL
-                        + path
-                )
-        else {
-
+        do {
+            return try OllamaEndpoint.url(
+                path: path
+            )
+        } catch {
             throw
                 OllamaClientError
                     .invalidURL
         }
-
-        return url
     }
 
     // MARK: - System Prompt

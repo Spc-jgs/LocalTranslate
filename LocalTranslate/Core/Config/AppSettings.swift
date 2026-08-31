@@ -1,14 +1,33 @@
 import Foundation
 
-enum AppSettings {
+/// 全部 UserDefaults key 与默认值的唯一出处。
+///
+/// 任何 Feature 都不再内联裸字符串 key：key 一旦分散，读与写就会各自漂移。
+nonisolated enum AppSettings {
 
     enum Key {
+
+        // MARK: Translate
+
         static let model = "ollamaModel"
         static let baseURL = "ollamaBaseURL"
         static let keepAlive = "ollamaKeepAlive"
         static let translationStyle = "translationStyle"
         static let customPrompt = "customTranslationPrompt"
+
+        // MARK: Live Subtitles
+
+        static let liveSourceLanguage = "liveSubtitlesSourceLanguage"
+        static let liveDisplayMode = "liveSubtitlesDisplayMode"
+        static let liveFontSize = "liveSubtitlesFontSize"
+        static let liveClickThrough = "liveSubtitlesClickThrough"
+
+        // MARK: AI Usage
+
+        static let usageProviderConfigurations = "aiUsageProviderConfigurations"
     }
+
+    // MARK: - Translate
 
     static let defaultModel = "qwen3.5:4b"
     static let defaultBaseURL = "http://127.0.0.1:11434"
@@ -47,5 +66,17 @@ enum AppSettings {
         UserDefaults.standard.string(
             forKey: Key.customPrompt
         ) ?? defaultCustomPrompt
+    }
+
+    // MARK: - Live Subtitles
+
+    static let defaultLiveFontSize: CGFloat = 26
+    static let liveFontSizeRange: ClosedRange<CGFloat> = 16...34
+    static let liveFontSizeStep: CGFloat = 2
+
+    static var liveClickThrough: Bool {
+        UserDefaults.standard.bool(
+            forKey: Key.liveClickThrough
+        )
     }
 }
