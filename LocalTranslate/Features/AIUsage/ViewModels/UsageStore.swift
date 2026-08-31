@@ -1,13 +1,6 @@
 import Foundation
 import Combine
 
-struct ChartMetrics: Sendable {
-    let points: [DailyActivity]
-    let totalTokens: Int64
-    let averageTokens: Int64
-    let peak: DailyActivity?
-}
-
 @MainActor
 final class UsageStore: ObservableObject {
     static let shared = UsageStore()
@@ -23,43 +16,63 @@ final class UsageStore: ObservableObject {
         !refreshingProviderIDs.isEmpty
     }
 
-    // Precomputed metrics for 7-day and 30-day views
-    @Published private(set) var metrics7Days: ChartMetrics = ChartMetrics(points: [], totalTokens: 0, averageTokens: 0, peak: nil)
-    @Published private(set) var metrics30Days: ChartMetrics = ChartMetrics(points: [], totalTokens: 0, averageTokens: 0, peak: nil)
+    // 聚合结果由 store 持有，只在 accounts 或统计周期变化时重算一次。
+    @Published private(set) var dashboard = UsageDashboardSnapshot(
+        accounts: [],
+        range: .thirtyDays
+    )
+
+    @Published private(set) var historyRange: UsageHistoryRange = .thirtyDays
 
     private var refreshLoop: Task<Void, Never>?
     private var providerRefreshTasks: [String: Task<Void, Never>] = [:]
     private var providerRefreshGenerations: [String: UUID] = [:]
-    private let providers: [any UsageProvider]
+
+    // 账号来源由用户配置决定，不再写死在这里。
+    private let settingsStore: UsageProviderSettingsStore
+    private var providers: [any UsageProvider]
+    private var settingsObserver: AnyCancellable?
 
     private init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-
-        providers = [
-            CodexProvider(
-                providerID: "codex-plus-a",
-                displayName: "Codex Plus A",
-                codexHome: home.appendingPathComponent(".codex", isDirectory: true),
-                sortOrder: 10
-            ),
-            CodexProvider(
-                providerID: "codex-plus-b",
-                displayName: "Codex Plus B",
-                codexHome: home.appendingPathComponent(".codex_account2", isDirectory: true),
-                sortOrder: 20
-            ),
-            ClaudeProvider(),
-            AGYProvider(),
-            GrokProvider(),
-            QwenTokenPlanProvider()
-        ]
+        let settingsStore = UsageProviderSettingsStore.shared
+        self.settingsStore = settingsStore
+        self.providers = settingsStore.makeProviders()
 
         // Load cached snapshot instantly for 0ms cold-start
         let cached = UsageDiskCache.shared.load()
         if !cached.isEmpty {
-            self.accounts = cached.sorted { $0.sortOrder < $1.sortOrder }
-            self.lastRefresh = cached.map(\.updatedAt).max()
-            recomputeMetrics()
+            self.accounts = cached
+                .filter { settingsStore.activeProviderIDs().contains($0.id) }
+                .sorted { $0.sortOrder < $1.sortOrder }
+            self.lastRefresh = accounts.map(\.updatedAt).max()
+            recomputeDashboard()
+        }
+
+        settingsObserver = settingsStore.$settings
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.reloadProviders()
+            }
+    }
+
+    /// 账号配置变化后重建 Provider，并丢弃已删除账号的快照。
+    private func reloadProviders() {
+        providerRefreshTasks.values.forEach { $0.cancel() }
+        providerRefreshTasks.removeAll()
+        providerRefreshGenerations.removeAll()
+        refreshingProviderIDs.removeAll()
+
+        providers = settingsStore.makeProviders()
+
+        let active = settingsStore.activeProviderIDs()
+        accounts.removeAll { !active.contains($0.id) }
+        errors = errors.filter { active.contains($0.key) }
+        recomputeDashboard()
+        UsageDiskCache.shared.save(accounts)
+
+        guard refreshLoop != nil else { return }
+        Task { [weak self] in
+            await self?.refreshStaleAccounts()
         }
     }
 
@@ -192,7 +205,7 @@ final class UsageStore: ObservableObject {
         accounts = nextAccounts.sorted { $0.sortOrder < $1.sortOrder }
         errors.removeValue(forKey: providerID)
         lastRefresh = merged.updatedAt
-        recomputeMetrics()
+        recomputeDashboard()
 
         UsageDiskCache.shared.save(accounts)
     }
@@ -211,47 +224,16 @@ final class UsageStore: ObservableObject {
         refreshingProviderIDs.remove(providerID)
     }
 
-    private func recomputeMetrics() {
-        metrics7Days = computeMetrics(forDays: 7)
-        metrics30Days = computeMetrics(forDays: 30)
+    func setHistoryRange(_ range: UsageHistoryRange) {
+        guard range != historyRange else { return }
+        historyRange = range
+        recomputeDashboard()
     }
 
-    private func computeMetrics(forDays days: Int) -> ChartMetrics {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let start = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
-
-        var byDay: [Date: DailyActivity] = [:]
-        for offset in 0..<days {
-            if let date = calendar.date(byAdding: .day, value: offset, to: start) {
-                let day = calendar.startOfDay(for: date)
-                byDay[day] = DailyActivity(date: day, tokens: 0, turns: 0)
-            }
-        }
-
-        for account in accounts {
-            for item in account.dailyActivity {
-                let day = calendar.startOfDay(for: item.date)
-                guard day >= start && day <= today else { continue }
-                let current = byDay[day] ?? DailyActivity(date: day, tokens: 0, turns: 0)
-                byDay[day] = DailyActivity(
-                    date: day,
-                    tokens: current.tokens + item.tokens,
-                    turns: current.turns + item.turns
-                )
-            }
-        }
-
-        let points = byDay.values.sorted { $0.date < $1.date }
-        let total = points.reduce(Int64(0)) { $0 + $1.tokens }
-        let avg = points.isEmpty ? 0 : total / Int64(points.count)
-        let peak = points.max { $0.tokens < $1.tokens }
-
-        return ChartMetrics(
-            points: points,
-            totalTokens: total,
-            averageTokens: avg,
-            peak: peak
+    private func recomputeDashboard() {
+        dashboard = UsageDashboardSnapshot(
+            accounts: accounts,
+            range: historyRange
         )
     }
 }

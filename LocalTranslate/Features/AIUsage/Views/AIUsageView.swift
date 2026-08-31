@@ -5,16 +5,19 @@ struct AIUsageView: View {
     @ObservedObject var store: UsageStore
 
     @State
-    private var historyRange: UsageHistoryRange = .thirtyDays
-
-    @State
     private var breakdownMode: UsageBreakdownMode = .model
 
+    @State
+    private var isEditingProviders = false
+
+    // 聚合由 store 持有：写成计算属性会让这段多趟遍历跟着每一次
+    // body 求值重跑（hover、刷新标记、错误变化都会触发）。
     private var dashboard: UsageDashboardSnapshot {
-        UsageDashboardSnapshot(
-            accounts: store.accounts,
-            range: historyRange
-        )
+        store.dashboard
+    }
+
+    private var historyRange: UsageHistoryRange {
+        store.historyRange
     }
 
     private var subscriptionAccounts: [AccountSnapshot] {
@@ -59,6 +62,9 @@ struct AIUsageView: View {
         .onDisappear {
             store.stop()
         }
+        .sheet(isPresented: $isEditingProviders) {
+            UsageProviderSettingsView()
+        }
     }
 
     private var toolbar: some View {
@@ -83,6 +89,15 @@ struct AIUsageView: View {
             }
 
             Spacer()
+
+            Button {
+                isEditingProviders = true
+            } label: {
+                Label("账号来源", systemImage: "slider.horizontal.3")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderless)
+            .help("增删 Codex 账号目录、启停其他来源")
         }
     }
 
@@ -106,7 +121,7 @@ struct AIUsageView: View {
         ContentUnavailableView {
             Label("还没有用量数据", systemImage: "chart.bar.xaxis")
         } description: {
-            Text("刷新后会读取已配置的 Codex、Claude、AGY、Grok 与百炼 Token Plan 数据；单个来源失败不会影响其他来源。")
+            Text("刷新后会读取「账号来源」中已启用的来源；单个来源失败不会影响其他来源。")
         }
         .frame(maxWidth: .infinity, minHeight: 320)
     }
@@ -174,7 +189,13 @@ struct AIUsageView: View {
 
                 Spacer()
 
-                Picker("统计周期", selection: $historyRange) {
+                Picker(
+                    "统计周期",
+                    selection: Binding(
+                        get: { store.historyRange },
+                        set: { store.setHistoryRange($0) }
+                    )
+                ) {
                     ForEach(UsageHistoryRange.allCases) { range in
                         Text(range.title)
                             .tag(range)
@@ -325,247 +346,6 @@ struct AIUsageView: View {
                 .foregroundStyle(.secondary)
         }
     }
-}
-
-private enum UsageHistoryRange: Int, CaseIterable, Identifiable {
-    case sevenDays = 7
-    case thirtyDays = 30
-    case ninetyDays = 90
-
-    var id: Int { rawValue }
-
-    var title: String {
-        switch self {
-        case .sevenDays:
-            return "7 天"
-        case .thirtyDays:
-            return "30 天"
-        case .ninetyDays:
-            return "90 天"
-        }
-    }
-}
-
-private enum UsageBreakdownMode: String, CaseIterable, Identifiable {
-    case model
-    case day
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .model:
-            return "模型"
-        case .day:
-            return "日期"
-        }
-    }
-}
-
-private struct UsageDashboardSnapshot {
-    let range: UsageHistoryRange
-    let totalTokens: Int64
-    let totalTurns: Int
-    let dailyTotals: [DailyActivity]
-    let providerRows: [ProviderUsageRow]
-    let todayModels: [ModelUsageRow]
-    let models: [ModelUsageRow]
-    let todayTokenBreakdown: TokenBreakdown
-    let modelTokenBreakdown: TokenBreakdown
-    let todayCostUSD: Double?
-    let todayCostLabel: String
-    let historyCostUSD: Double?
-    let historyCostIncludesEstimate: Bool
-    let historyCostCoverageComplete: Bool
-    let includesEstimatedActivity: Bool
-
-    init(accounts: [AccountSnapshot], range: UsageHistoryRange) {
-        self.range = range
-
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let start = calendar.date(
-            byAdding: .day,
-            value: -(range.rawValue - 1),
-            to: today
-        ) ?? today
-
-        var dailyMap: [Date: DailyActivity] = [:]
-        var providerMap: [ProviderKind: (tokens: Int64, turns: Int, estimated: Bool)] = [:]
-
-        for offset in 0..<range.rawValue {
-            if let date = calendar.date(byAdding: .day, value: offset, to: start) {
-                let day = calendar.startOfDay(for: date)
-                dailyMap[day] = DailyActivity(date: day, tokens: 0, turns: 0)
-            }
-        }
-
-        for account in accounts {
-            for activity in account.dailyActivity {
-                let day = calendar.startOfDay(for: activity.date)
-                guard day >= start && day <= today else { continue }
-
-                let current = dailyMap[day] ?? DailyActivity(date: day, tokens: 0, turns: 0)
-                dailyMap[day] = DailyActivity(
-                    date: day,
-                    tokens: current.tokens + activity.tokens,
-                    turns: current.turns + activity.turns
-                )
-
-                var provider = providerMap[account.provider]
-                    ?? (tokens: 0, turns: 0, estimated: false)
-                provider.tokens += activity.tokens
-                provider.turns += activity.turns
-                provider.estimated = provider.estimated || account.confidence == .low
-                providerMap[account.provider] = provider
-            }
-        }
-
-        let points = dailyMap.values.sorted { $0.date < $1.date }
-        dailyTotals = points
-        let total = points.reduce(Int64(0)) { $0 + $1.tokens }
-        totalTokens = total
-        totalTurns = points.reduce(0) { $0 + $1.turns }
-
-        let rows = providerMap.map { provider, values in
-            ProviderUsageRow(
-                provider: provider,
-                tokens: values.tokens,
-                turns: values.turns,
-                share: total > 0
-                    ? Double(values.tokens) / Double(total)
-                    : 0,
-                isEstimated: values.estimated
-            )
-        }
-        .sorted { $0.tokens > $1.tokens }
-        providerRows = rows
-
-        todayModels = Self.makeModelRows(accounts: accounts, period: .today)
-        models = Self.makeModelRows(accounts: accounts, period: .thirtyDays)
-
-        var todayBreakdown = TokenBreakdown()
-        for row in todayModels {
-            todayBreakdown.add(row.usage)
-        }
-        todayTokenBreakdown = todayBreakdown
-
-        var breakdown = TokenBreakdown()
-        for row in models {
-            breakdown.add(row.usage)
-        }
-        modelTokenBreakdown = breakdown
-
-        let todayCosts = todayModels.compactMap(\.costUSD)
-        todayCostUSD = todayCosts.isEmpty ? nil : todayCosts.reduce(0, +)
-        let todayCostComplete = !todayModels.isEmpty
-            && todayCosts.count == todayModels.count
-        let todayCostEstimated = todayModels.contains {
-            $0.costKind == .estimated
-        }
-
-        if todayCostUSD == nil {
-            todayCostLabel = "参考费用"
-        } else if !todayCostComplete {
-            todayCostLabel = "参考费用 · 部分"
-        } else if todayCostEstimated {
-            todayCostLabel = "参考费用 · 估算"
-        } else {
-            todayCostLabel = "日志费用"
-        }
-
-        let historyCosts = models.compactMap(\.costUSD)
-        historyCostUSD = historyCosts.isEmpty
-            ? nil
-            : historyCosts.reduce(0, +)
-        historyCostIncludesEstimate = models.contains {
-            $0.costKind == .estimated
-        }
-        historyCostCoverageComplete = !models.isEmpty
-            && historyCosts.count == models.count
-        includesEstimatedActivity = rows.contains { $0.isEstimated && $0.tokens > 0 }
-    }
-
-    private static func makeModelRows(
-        accounts: [AccountSnapshot],
-        period: ActivityPeriod
-    ) -> [ModelUsageRow] {
-        struct MutableModel {
-            let provider: ProviderKind
-            let modelID: String
-            let displayName: String
-            var usage = TokenBreakdown()
-            var turns = 0
-            var costUSD: Double = 0
-            var costComplete = true
-            var costKind: UsageCostKind?
-        }
-
-        var modelMap: [String: MutableModel] = [:]
-
-        for account in accounts {
-            for model in account.modelActivity where model.period == period {
-                let key = "\(account.provider.rawValue)::\(model.modelID)"
-                var current = modelMap[key] ?? MutableModel(
-                    provider: account.provider,
-                    modelID: model.modelID,
-                    displayName: model.displayName
-                )
-
-                current.usage.add(model.usage)
-                current.turns += model.turns
-
-                if let cost = model.costUSD {
-                    current.costUSD += cost
-                } else {
-                    current.costComplete = false
-                }
-
-                if model.costKind == .estimated {
-                    current.costKind = .estimated
-                } else if current.costKind == nil {
-                    current.costKind = model.costKind
-                }
-
-                modelMap[key] = current
-            }
-        }
-
-        return modelMap.map { key, value in
-            ModelUsageRow(
-                id: key,
-                provider: value.provider,
-                modelID: value.modelID,
-                displayName: value.displayName,
-                usage: value.usage,
-                turns: value.turns,
-                costUSD: value.costComplete ? value.costUSD : nil,
-                costKind: value.costComplete ? value.costKind : nil
-            )
-        }
-        .sorted { $0.usage.totalTokens > $1.usage.totalTokens }
-    }
-}
-
-private struct ProviderUsageRow: Identifiable {
-    let provider: ProviderKind
-    let tokens: Int64
-    let turns: Int
-    let share: Double
-    let isEstimated: Bool
-
-    var id: String { provider.rawValue }
-}
-
-private struct ModelUsageRow: Identifiable {
-    let id: String
-    let provider: ProviderKind
-    let modelID: String
-    let displayName: String
-    var usage: TokenBreakdown
-    var turns: Int
-    var costUSD: Double?
-    var costKind: UsageCostKind?
 }
 
 private struct UsageHeadlineCard: View {
