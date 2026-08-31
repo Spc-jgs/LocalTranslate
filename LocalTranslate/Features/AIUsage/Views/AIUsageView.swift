@@ -256,38 +256,38 @@ struct AIUsageView: View {
                 subtitle: "按本机时区自然日汇总模型、Token、活动次数与参考费用"
             )
 
-            LazyVGrid(
-                columns: Array(
-                    repeating: GridItem(.flexible(), spacing: 10),
-                    count: 4
-                ),
-                spacing: 10
-            ) {
-                SummaryMetric(
-                    label: "今日 Token",
-                    value: TokenFormatter.compact(dashboard.todayTokenBreakdown.totalTokens),
-                    systemImage: "sum"
+            // 四个等权指标卡扫视时没有落点。今日 Token 升为主视觉，
+            // 输入/输出降为卫星并各自标出占比，费用单独一格。
+            HStack(alignment: .top, spacing: 10) {
+                TodayHeadlineMetric(
+                    total: dashboard.todayTokenBreakdown.totalTokens,
+                    turns: dashboard.todayTurns,
+                    modelCount: dashboard.todayModels.count
                 )
+                .frame(maxWidth: .infinity)
 
-                SummaryMetric(
-                    label: "输入",
-                    value: TokenFormatter.compact(dashboard.todayTokenBreakdown.inputTokens),
-                    systemImage: "text.append"
-                )
+                VStack(spacing: 10) {
+                    TodaySatelliteMetric(
+                        label: "输入",
+                        value: dashboard.todayTokenBreakdown.inputTokens,
+                        total: dashboard.todayTokenBreakdown.totalTokens,
+                        systemImage: "arrow.down.left"
+                    )
 
-                SummaryMetric(
-                    label: "输出",
-                    value: TokenFormatter.compact(dashboard.todayTokenBreakdown.outputTokens),
-                    systemImage: "arrow.up.right"
-                )
+                    TodaySatelliteMetric(
+                        label: "输出",
+                        value: dashboard.todayTokenBreakdown.outputTokens,
+                        total: dashboard.todayTokenBreakdown.totalTokens,
+                        systemImage: "arrow.up.right"
+                    )
+                }
+                .frame(maxWidth: .infinity)
 
-                SummaryMetric(
+                TodayCostMetric(
                     label: dashboard.todayCostLabel,
-                    value: dashboard.todayCostUSD.map {
-                        CurrencyFormatter.usd($0)
-                    } ?? "—",
-                    systemImage: "dollarsign.circle"
+                    amount: dashboard.todayCostUSD
                 )
+                .frame(maxWidth: .infinity)
             }
 
             ModelBreakdownTable(
@@ -535,33 +535,165 @@ private struct UsageTrendCard: View {
     }
 }
 
-private struct SummaryMetric: View {
+/// 今日 Token：整页的主视觉锚点。
+private struct TodayHeadlineMetric: View {
+    let total: Int64
+    let turns: Int
+    let modelCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "sum")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+
+                Text("今日 Token")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(TokenFormatter.compact(total))
+                .font(.system(size: 34, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .padding(.top, 5)
+
+            HStack(spacing: 6) {
+                Text("\(turns) 次调用")
+                    .monospacedDigit()
+
+                Text("·")
+                    .foregroundStyle(.quaternary)
+
+                Text("\(modelCount) 个模型")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(.tertiary)
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 15)
+        .padding(.vertical, 14)
+        .background {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.accentColor.opacity(0.10),
+                            Color.clear
+                        ],
+                        center: .topLeading,
+                        startRadius: 0,
+                        endRadius: 220
+                    )
+                )
+        }
+        .dashboardCard()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("今日 Token \(TokenFormatter.compact(total))")
+    }
+}
+
+/// 输入 / 输出：附带占比，说明这两个量本身就不对等。
+private struct TodaySatelliteMetric: View {
     let label: String
-    let value: String
+    let value: Int64
+    let total: Int64
     let systemImage: String
+
+    private var share: Double? {
+        guard total > 0 else { return nil }
+        return Double(value) / Double(total) * 100
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 26, height: 26)
-                .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                .frame(width: 24, height: 24)
+                .background(
+                    Color.accentColor.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(label)
-                    .font(.system(size: 9))
+                    .font(.system(size: 9.5))
                     .foregroundStyle(.secondary)
 
-                Text(value)
+                Text(TokenFormatter.compact(value))
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .monospacedDigit()
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 4)
+
+            if let share {
+                Text("\(share, specifier: "%.1f")%")
+                    .font(.system(size: 9.5, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
         }
-        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .dashboardCard()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label) \(TokenFormatter.compact(value))")
+    }
+}
+
+/// 参考费用：口径标注跟着标题走，避免被误读成实际扣款。
+private struct TodayCostMetric: View {
+    let label: String
+    let amount: Double?
+
+    private var qualifier: String? {
+        guard let separator = label.range(of: " · ") else { return nil }
+        return String(label[separator.upperBound...])
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Text("参考费用")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary)
+
+                if let qualifier {
+                    Text(qualifier)
+                        .font(.system(size: 8.5))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(
+                            Color.primary.opacity(0.06),
+                            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        )
+                }
+            }
+
+            Text(amount.map { CurrencyFormatter.usd($0) } ?? "—")
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+
+            Text("非订阅实际扣款")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .dashboardCard()
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -712,7 +844,8 @@ private struct UnavailableQuotaRow: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
+        .padding(11)
+        .dashboardCard(.inset)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("暂无可验证的订阅额度窗口")
     }
@@ -733,49 +866,65 @@ private struct QuotaWindowTile: View {
         return provider.tint
     }
 
+    /// 余量见底时整块瓦片转色，不必逐个读进度条才发现问题。
+    private var isCritical: Bool {
+        (remaining ?? 100) <= 15
+    }
+
     private var used: Double? {
         window.usedPercent.map { max(0, min(100, $0)) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .center, spacing: 6) {
-                Text(window.title)
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
-
-                Spacer()
-
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 5) {
                 Circle()
                     .fill(remaining == nil ? Color.secondary : tint)
-                    .frame(width: 6, height: 6)
+                    .frame(width: 5, height: 5)
+
+                Text(window.title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(remaining.map { "\(Int($0.rounded(.down)))%" } ?? "—")
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(remaining.map { "\(Int($0.rounded(.down)))" } ?? "—")
+                    .font(.system(size: 25, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(remaining == nil ? Color.secondary : tint)
                     .contentTransition(.numericText())
 
+                if remaining != nil {
+                    Text("%")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(tint)
+                }
+
                 Text("剩余")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 8.5))
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 2)
             }
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.07))
+                    Capsule().fill(Color.primary.opacity(0.09))
                     if let remaining {
                         Capsule()
-                            .fill(tint.gradient)
+                            .fill(tint)
                             .frame(
-                                width: proxy.size.width * max(0, min(1, remaining / 100))
+                                width: max(
+                                    remaining > 0 ? 3 : 0,
+                                    proxy.size.width * max(0, min(1, remaining / 100))
+                                )
                             )
                     }
                 }
             }
-            .frame(height: 6)
+            .frame(height: 4)
 
             HStack(spacing: 5) {
                 if let used {
@@ -786,29 +935,25 @@ private struct QuotaWindowTile: View {
 
                 Spacer(minLength: 4)
 
-                Label {
-                    if let reset = window.resetsAt {
-                        Text(reset, style: .relative)
-                            .help(reset.formatted(date: .abbreviated, time: .shortened))
-                    } else {
-                        Text("未知")
-                    }
-                } icon: {
-                    Image(systemName: "clock")
+                if let reset = window.resetsAt {
+                    Text(reset, style: .relative)
+                        .help(reset.formatted(date: .abbreviated, time: .shortened))
+                } else {
+                    Text("重置时间未知")
                 }
-                .labelStyle(.titleAndIcon)
             }
-            .font(.system(size: 8))
+            .font(.system(size: 8.5))
+            .monospacedDigit()
             .foregroundStyle(.tertiary)
         }
-        .padding(10)
-        .background(
-            provider.tint.opacity(0.045),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .overlay {
+        .padding(11)
+        .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(provider.tint.opacity(0.1), lineWidth: 0.5)
+                .fill(
+                    isCritical
+                        ? Color.red.opacity(0.10)
+                        : Color.primary.opacity(0.055)
+                )
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(window.title)额度")
@@ -838,66 +983,108 @@ private struct ModelBreakdownTable: View {
             } else {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     HStack(spacing: 12) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 9) {
                             Image(systemName: row.provider.systemImage)
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(row.provider.tint)
-                                .frame(width: 18)
+                                .frame(width: 22, height: 22)
+                                .background(
+                                    row.provider.tint.opacity(0.13),
+                                    in: RoundedRectangle(
+                                        cornerRadius: 6,
+                                        style: .continuous
+                                    )
+                                )
 
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(row.displayName)
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.system(size: 11.5, weight: .medium))
                                     .lineLimit(1)
                                 Text(
                                     row.turns == 0 && row.usage.totalTokens == 0
                                         ? "\(row.provider.rawValue) · 活动中，等待用量落盘"
                                         : "\(row.provider.rawValue) · \(row.turns) 次"
                                 )
-                                    .font(.system(size: 8))
+                                    .font(.system(size: 8.5))
                                     .foregroundStyle(.tertiary)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         Text(TokenFormatter.compact(row.usage.inputTokens))
+                            .foregroundStyle(.secondary)
                             .frame(width: 62, alignment: .trailing)
 
                         Text(TokenFormatter.compact(row.usage.cachedReadTokens))
+                            .foregroundStyle(.tertiary)
                             .frame(width: 62, alignment: .trailing)
 
                         Text(TokenFormatter.compact(row.usage.outputTokens))
+                            .foregroundStyle(.secondary)
                             .frame(width: 62, alignment: .trailing)
 
-                        Text(TokenFormatter.compact(row.usage.totalTokens))
-                            .fontWeight(.semibold)
-                            .frame(width: 68, alignment: .trailing)
+                        // Token 列带占比条：省掉一张单独的模型分布图。
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text(TokenFormatter.compact(row.usage.totalTokens))
+                                .fontWeight(.semibold)
+
+                            GeometryReader { proxy in
+                                ZStack(alignment: .trailing) {
+                                    Capsule()
+                                        .fill(Color.primary.opacity(0.07))
+                                    Capsule()
+                                        .fill(row.provider.tint.opacity(0.85))
+                                        .frame(
+                                            width: proxy.size.width
+                                                * share(of: row)
+                                        )
+                                }
+                            }
+                            .frame(height: 3)
+                        }
+                        .frame(width: 68, alignment: .trailing)
 
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(row.costUSD.map {
                                 CurrencyFormatter.usd($0)
                             } ?? "—")
+                            .foregroundStyle(
+                                row.costUSD == nil ? .tertiary : .primary
+                            )
 
-                            if let kind = row.costKind {
-                                Text(kind == .estimated ? "估算" : "日志")
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(.tertiary)
-                            }
+                            Text(costCaption(for: row))
+                                .font(.system(size: 7.5))
+                                .foregroundStyle(.tertiary)
                         }
                         .frame(width: 72, alignment: .trailing)
                     }
-                    .font(.system(size: 10, design: .rounded))
+                    .font(.system(size: 10.5, design: .rounded))
                     .monospacedDigit()
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, 10)
 
                     if index < rows.count - 1 {
                         Divider()
                             .opacity(0.22)
-                            .padding(.leading, 40)
+                            .padding(.leading, 45)
                     }
                 }
             }
         }
+    }
+
+    /// 相对本表最大值的占比，用于 Token 列的条。
+    private func share(of row: ModelUsageRow) -> Double {
+        let maximum = rows.map(\.usage.totalTokens).max() ?? 0
+        guard maximum > 0 else { return 0 }
+        return max(0, min(1, Double(row.usage.totalTokens) / Double(maximum)))
+    }
+
+    private func costCaption(for row: ModelUsageRow) -> String {
+        guard let kind = row.costKind else {
+            return row.costUSD == nil ? "无费用" : ""
+        }
+        return kind == .estimated ? "估算" : "日志"
     }
 
     private var tableHeader: some View {
@@ -1078,23 +1265,70 @@ private struct AccountSourceDisclosure: View {
     }
 }
 
+/// 看板的表面层级。
+///
+/// 之前整页都是同一档深灰加一圈描边，层次只能靠边框读出来。现在页面本身是
+/// 第 0 层，卡片抬一档，卡片内嵌的瓦片再抬一档，描边退成辅助。
+private enum DashboardSurface {
+    /// 直接放在页面上的卡片。
+    case card
+    /// 卡片内部的嵌套块（额度瓦片、提示行）。
+    case inset
+
+    var fill: Double {
+        switch self {
+        case .card: return 0.032
+        case .inset: return 0.055
+        }
+    }
+
+    var stroke: Double {
+        switch self {
+        case .card: return 0.055
+        case .inset: return 0.0
+        }
+    }
+
+    var cornerRadius: CGFloat {
+        switch self {
+        case .card: return 13
+        case .inset: return 10
+        }
+    }
+}
+
 private struct DashboardCardModifier: ViewModifier {
+    var surface: DashboardSurface = .card
+
     func body(content: Content) -> some View {
         content
             .background {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(Color.primary.opacity(0.032))
+                RoundedRectangle(
+                    cornerRadius: surface.cornerRadius,
+                    style: .continuous
+                )
+                .fill(Color.primary.opacity(surface.fill))
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .stroke(Color.primary.opacity(0.055), lineWidth: 1)
+                if surface.stroke > 0 {
+                    RoundedRectangle(
+                        cornerRadius: surface.cornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(
+                        Color.primary.opacity(surface.stroke),
+                        lineWidth: 1
+                    )
+                }
             }
     }
 }
 
 private extension View {
-    func dashboardCard() -> some View {
-        modifier(DashboardCardModifier())
+    func dashboardCard(
+        _ surface: DashboardSurface = .card
+    ) -> some View {
+        modifier(DashboardCardModifier(surface: surface))
     }
 }
 

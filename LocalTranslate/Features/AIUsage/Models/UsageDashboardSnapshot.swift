@@ -45,6 +45,8 @@ nonisolated struct UsageDashboardSnapshot {
     let dailyTotals: [DailyActivity]
     let providerRows: [ProviderUsageRow]
     let todayModels: [ModelUsageRow]
+    /// 今日调用次数合计，供 headline 展示；与 todayModels 同源。
+    let todayTurns: Int
     let models: [ModelUsageRow]
     let todayTokenBreakdown: TokenBreakdown
     let modelTokenBreakdown: TokenBreakdown
@@ -118,6 +120,7 @@ nonisolated struct UsageDashboardSnapshot {
         providerRows = rows
 
         todayModels = Self.makeModelRows(accounts: accounts, period: .today)
+        todayTurns = todayModels.reduce(0) { $0 + $1.turns }
         let modelPeriod: ActivityPeriod
         switch range {
         case .sevenDays:
