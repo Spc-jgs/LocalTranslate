@@ -495,7 +495,11 @@ nonisolated final class UsageIndex {
                        SUM(e.cached_read_tokens), SUM(e.cache_write_tokens),
                        SUM(e.reasoning_tokens), SUM(e.turn_count),
                        SUM(e.cost_microusd),
-                       SUM(CASE WHEN e.cost_microusd IS NULL THEN 1 ELSE 0 END),
+                       SUM(CASE
+                               WHEN e.cost_microusd IS NULL
+                                AND (e.input_tokens + e.output_tokens) > 0
+                               THEN 1 ELSE 0
+                           END),
                        MIN(e.cost_kind), MAX(e.cost_kind)
                 FROM usage_event e
                 JOIN source_file f ON f.id = e.source_file_id

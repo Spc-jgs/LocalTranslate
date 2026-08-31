@@ -24,6 +24,7 @@ struct AGYProvider: UsageProvider {
             id: providerID,
             sortOrder: sortOrder,
             provider: .google,
+            billingKind: .local,
             displayName: "Antigravity (AGY)",
             email: email,
             plan: "Google AI Developer",
@@ -35,7 +36,7 @@ struct AGYProvider: UsageProvider {
             sourceLabel: "AGY 本机增量索引（字符量估算）",
             confidence: .low,
             statusMessage: status,
-            schemaVersion: 3,
+            schemaVersion: 4,
             quotaAvailable: false,
             activityAvailable: true
         )

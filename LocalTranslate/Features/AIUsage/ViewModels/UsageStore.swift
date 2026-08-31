@@ -12,7 +12,7 @@ struct ChartMetrics: Sendable {
 final class UsageStore: ObservableObject {
     static let shared = UsageStore()
     static let automaticRefreshInterval: TimeInterval = 30 * 60
-    static let currentSnapshotSchemaVersion = 3
+    static let currentSnapshotSchemaVersion = 4
 
     @Published private(set) var accounts: [AccountSnapshot] = []
     @Published private(set) var refreshingProviderIDs: Set<String> = []
@@ -48,8 +48,10 @@ final class UsageStore: ObservableObject {
                 codexHome: home.appendingPathComponent(".codex_account2", isDirectory: true),
                 sortOrder: 20
             ),
+            ClaudeProvider(),
             AGYProvider(),
-            GrokProvider()
+            GrokProvider(),
+            QwenTokenPlanProvider()
         ]
 
         // Load cached snapshot instantly for 0ms cold-start
@@ -160,6 +162,7 @@ final class UsageStore: ObservableObject {
             id: snapshot.id,
             sortOrder: snapshot.sortOrder,
             provider: snapshot.provider,
+            billingKind: snapshot.billingKind ?? previous?.billingKind,
             displayName: snapshot.displayName,
             email: snapshot.email ?? previous?.email,
             plan: snapshot.plan ?? previous?.plan,

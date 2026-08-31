@@ -18,13 +18,17 @@ struct GrokProvider: UsageProvider {
         let combinedStatus = [
             remoteOutcome.snapshot?.statusMessage,
             remoteOutcome.errorMessage,
-            localSnapshot.catchUpPending ? "本地历史正在分片补齐" : nil
+            localSnapshot.catchUpPending ? "本地历史正在分片补齐" : nil,
+            hasPendingModelEvidence(localSnapshot)
+                ? "当前会话已识别模型，Token 与活动次数将在任务完成后落盘"
+                : nil
         ].compactMap { $0 }.joined(separator: "；")
 
         return AccountSnapshot(
             id: providerID,
             sortOrder: sortOrder,
             provider: .xAI,
+            billingKind: .subscription,
             displayName: "SuperGrok",
             email: remoteOutcome.credentials?.email,
             plan: remoteOutcome.snapshot?.plan,
@@ -38,10 +42,16 @@ struct GrokProvider: UsageProvider {
                 : "Grok billing + 本机增量索引",
             confidence: remoteOutcome.errorMessage == nil ? .high : .medium,
             statusMessage: combinedStatus.isEmpty ? nil : combinedStatus,
-            schemaVersion: 3,
+            schemaVersion: 4,
             quotaAvailable: remoteOutcome.snapshot != nil,
             activityAvailable: true
         )
+    }
+
+    private func hasPendingModelEvidence(_ snapshot: IndexedActivitySnapshot) -> Bool {
+        snapshot.modelActivity.contains {
+            $0.period == .today && $0.turns == 0 && $0.usage.totalTokens == 0
+        }
     }
 
     private func fetchRemoteGracefully() async -> GrokRemoteOutcome {

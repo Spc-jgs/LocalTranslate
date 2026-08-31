@@ -9,9 +9,16 @@ struct AIUsageProviderFixtureTests {
         try await codexHalfLineWaitsForNewline()
         try await grokPromptUpsertDoesNotDuplicate()
         try await grokModelDetailsDoNotInflateAccountTotals()
+        try await grokCurrentFormatPreservesModelEvidence()
+        try await grokEvidenceDoesNotHideCompletedReferenceCost()
         try await agyDatabaseCacheHitAndChangeRebuild()
+        try await agyWALHeaderWithoutSidecarsOpensImmutable()
+        try await claudeUsageIsIncremental()
+        try await qwenUsageSummaryIsIncremental()
+        codexServerDailyOverridesOverlappingLocalHistory()
+        referencePriceCatalogMatchesPublishedRates()
         try await corruptIndexIsQuarantinedAndRebuilt()
-        print("AIUsageProviderFixtureTests: 7 passed")
+        print("AIUsageProviderFixtureTests: 14 passed")
     }
 
     private static func codexUnchangedAndAppendAreIncremental() async throws {
@@ -193,6 +200,92 @@ struct AIUsageProviderFixtureTests {
         }
     }
 
+    private static func grokCurrentFormatPreservesModelEvidence() async throws {
+        try await withFixture { root, databaseURL in
+            let session = root.appendingPathComponent("workspace/session", isDirectory: true)
+            try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+            let file = session.appendingPathComponent("events.jsonl")
+            let line = json([
+                "type": "turn_started",
+                "ts": timestamp(),
+                "session_id": "session-current",
+                "turn_number": 0,
+                "model_id": "grok-4.6"
+            ])
+            try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
+
+            let snapshot = try await UsageActivityIndexer.shared.scanGrok(
+                providerID: "grok-current",
+                sessionsURL: root,
+                databaseURL: databaseURL
+            )
+            let model = snapshot.modelActivity.first {
+                $0.period == .today && $0.modelID == "grok-4.6-build"
+            }
+            expect(model != nil, "current Grok model evidence was not indexed")
+            expect(model?.turns == 0, "Grok model evidence invented a completed turn")
+            expect(model?.usage.totalTokens == 0, "Grok model evidence invented token usage")
+            expect(todayTokens(snapshot) == 0, "Grok model evidence inflated account tokens")
+        }
+    }
+
+    private static func grokEvidenceDoesNotHideCompletedReferenceCost() async throws {
+        try await withFixture { root, databaseURL in
+            let session = root.appendingPathComponent("workspace/session", isDirectory: true)
+            try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+            let started = json([
+                "type": "turn_started",
+                "ts": timestamp(),
+                "session_id": "session-priced",
+                "turn_number": 0,
+                "model_id": "grok-4.6"
+            ])
+            try (started + "\n").write(
+                to: session.appendingPathComponent("events.jsonl"),
+                atomically: true,
+                encoding: .utf8
+            )
+            let completed = json([
+                "timestamp": Date().timeIntervalSince1970,
+                "params": [
+                    "update": [
+                        "sessionUpdate": "turn_completed",
+                        "prompt_id": "priced",
+                        "usage": [
+                            "inputTokens": 100_000,
+                            "cachedReadTokens": 50_000,
+                            "outputTokens": 10_000,
+                            "modelUsage": [
+                                "grok-4.6-build": [
+                                    "inputTokens": 100_000,
+                                    "cachedReadTokens": 50_000,
+                                    "outputTokens": 10_000
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ])
+            try (completed + "\n").write(
+                to: session.appendingPathComponent("updates.jsonl"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+            let snapshot = try await UsageActivityIndexer.shared.scanGrok(
+                providerID: "grok-priced",
+                sessionsURL: root,
+                databaseURL: databaseURL
+            )
+            let model = snapshot.modelActivity.first {
+                $0.period == .today && $0.modelID == "grok-4.6-build"
+            }
+            expect(model?.turns == 1, "Grok model evidence duplicated the completed turn")
+            expect(model?.costUSD != nil, "Grok model evidence hid the reference price")
+            expect(model?.costKind == .estimated, "Grok reference price was not marked estimated")
+        }
+    }
+
     private static func agyDatabaseCacheHitAndChangeRebuild() async throws {
         try await withFixture { root, databaseURL in
             let conversations = root
@@ -249,6 +342,154 @@ struct AIUsageProviderFixtureTests {
             )
             expect(todayTokens(snapshot) == 400, "changed AGY database was not rebuilt")
         }
+    }
+
+    private static func agyWALHeaderWithoutSidecarsOpensImmutable() async throws {
+        try await withFixture { root, databaseURL in
+            let conversations = root
+                .appendingPathComponent("antigravity/conversations", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: conversations,
+                withIntermediateDirectories: true
+            )
+            let source = conversations.appendingPathComponent("wal.db")
+            var database: OpaquePointer?
+            expect(sqlite3_open(source.path, &database) == SQLITE_OK, "AGY WAL open failed")
+            expect(
+                sqlite3_exec(
+                    database,
+                    "PRAGMA journal_mode=WAL;"
+                        + "CREATE TABLE steps(metadata BLOB, step_payload BLOB);"
+                        + "INSERT INTO steps VALUES(zeroblob(0), zeroblob(350));"
+                        + "PRAGMA wal_checkpoint(TRUNCATE);",
+                    nil,
+                    nil,
+                    nil
+                ) == SQLITE_OK,
+                "AGY WAL fixture setup failed"
+            )
+            sqlite3_close_v2(database)
+            for suffix in ["-wal", "-shm"] {
+                try? FileManager.default.removeItem(
+                    at: URL(fileURLWithPath: source.path + suffix)
+                )
+            }
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o555],
+                ofItemAtPath: conversations.path
+            )
+            defer {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o755],
+                    ofItemAtPath: conversations.path
+                )
+            }
+
+            let snapshot = try await UsageActivityIndexer.shared.scanAGY(
+                providerID: "agy-wal-fixture",
+                geminiDirectory: root,
+                databaseURL: databaseURL
+            )
+            expect(todayTokens(snapshot) == 100, "AGY immutable WAL fallback lost rows")
+            expect(!snapshot.catchUpPending, "AGY immutable WAL fallback stayed partial")
+        }
+    }
+
+    private static func claudeUsageIsIncremental() async throws {
+        try await withFixture { root, databaseURL in
+            let projects = root.appendingPathComponent("projects/fixture", isDirectory: true)
+            try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+            let file = projects.appendingPathComponent("session.jsonl")
+            try (claudeLine(id: "msg-1", fresh: 10, cached: 20, output: 5) + "\n")
+                .write(to: file, atomically: true, encoding: .utf8)
+
+            var snapshot = try await UsageActivityIndexer.shared.scanClaude(
+                providerID: "claude-fixture",
+                claudeHome: root,
+                databaseURL: databaseURL
+            )
+            expect(todayTokens(snapshot) == 35, "Claude initial usage is wrong")
+
+            try appendLine(
+                claudeLine(id: "msg-2", fresh: 2, cached: 3, output: 4),
+                to: file
+            )
+            snapshot = try await UsageActivityIndexer.shared.scanClaude(
+                providerID: "claude-fixture",
+                claudeHome: root,
+                databaseURL: databaseURL
+            )
+            expect(todayTokens(snapshot) == 44, "Claude append was not incremental")
+        }
+    }
+
+    private static func qwenUsageSummaryIsIncremental() async throws {
+        try await withFixture { root, databaseURL in
+            let file = root.appendingPathComponent("usage_record.jsonl")
+            try (qwenLine(sessionID: "one", input: 12, output: 3, cached: 4) + "\n")
+                .write(to: file, atomically: true, encoding: .utf8)
+
+            var snapshot = try await UsageActivityIndexer.shared.scanQwen(
+                providerID: "qwen-fixture",
+                qwenHome: root,
+                databaseURL: databaseURL
+            )
+            expect(todayTokens(snapshot) == 15, "Qwen initial usage is wrong")
+
+            try appendLine(
+                qwenLine(sessionID: "two", input: 8, output: 2, cached: 1),
+                to: file
+            )
+            snapshot = try await UsageActivityIndexer.shared.scanQwen(
+                providerID: "qwen-fixture",
+                qwenHome: root,
+                databaseURL: databaseURL
+            )
+            expect(todayTokens(snapshot) == 25, "Qwen append was not incremental")
+        }
+    }
+
+    private static func codexServerDailyOverridesOverlappingLocalHistory() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+        let merged = CodexProvider.mergeDailyActivity(
+            server: [DailyActivity(date: yesterday, tokens: 100, turns: 0)],
+            local: [
+                DailyActivity(date: yesterday, tokens: 999, turns: 7),
+                DailyActivity(date: today, tokens: 50, turns: 2)
+            ]
+        )
+        let byDay = Dictionary(uniqueKeysWithValues: merged.map {
+            (calendar.startOfDay(for: $0.date), $0)
+        })
+        expect(byDay[yesterday]?.tokens == 100, "Codex server history was not authoritative")
+        expect(byDay[yesterday]?.turns == 7, "Codex local turn detail was discarded")
+        expect(byDay[today]?.tokens == 50, "Codex unreported local day was discarded")
+    }
+
+    private static func referencePriceCatalogMatchesPublishedRates() {
+        let claude = UsageReferencePriceCatalog.estimateClaude(
+            modelID: "claude-opus-5-20260801",
+            usage: TokenBreakdown(
+                inputTokens: 400_000,
+                outputTokens: 10_000,
+                cachedReadTokens: 200_000,
+                cacheCreationTokens: 100_000
+            ),
+            oneHourCacheCreationTokens: 100_000
+        )
+        expect(abs((claude ?? 0) - 1.85) < 0.000_001, "Claude reference price is wrong")
+
+        let grok = UsageReferencePriceCatalog.estimateGrok(
+            modelID: "grok-4.6-build",
+            usage: TokenBreakdown(
+                inputTokens: 250_000,
+                outputTokens: 10_000,
+                cachedReadTokens: 200_000
+            )
+        )
+        expect(abs((grok ?? 0) - 0.52) < 0.000_001, "Grok long-context price is wrong")
     }
 
     private static func withFixture(
@@ -338,6 +579,52 @@ struct AIUsageProviderFixtureTests {
                             ]
                         ]
                     ]
+                ]
+            ]
+        ])
+    }
+
+    private static func claudeLine(
+        id: String,
+        fresh: Int64,
+        cached: Int64,
+        output: Int64
+    ) -> String {
+        json([
+            "type": "assistant",
+            "timestamp": timestamp(),
+            "requestId": id,
+            "message": [
+                "id": id,
+                "model": "claude-opus-5",
+                "usage": [
+                    "input_tokens": fresh,
+                    "cache_read_input_tokens": cached,
+                    "cache_creation_input_tokens": 0,
+                    "output_tokens": output
+                ]
+            ]
+        ])
+    }
+
+    private static func qwenLine(
+        sessionID: String,
+        input: Int64,
+        output: Int64,
+        cached: Int64
+    ) -> String {
+        json([
+            "version": 1,
+            "sessionId": sessionID,
+            "timestamp": Int64(Date().timeIntervalSince1970 * 1_000),
+            "models": [
+                "qwen3.8-max": [
+                    "requests": 1,
+                    "inputTokens": input,
+                    "outputTokens": output,
+                    "cachedTokens": cached,
+                    "thoughtsTokens": 0,
+                    "totalTokens": input + output
                 ]
             ]
         ])

@@ -2,6 +2,8 @@ import Foundation
 
 nonisolated enum ProviderKind: String, Codable, Sendable, CaseIterable, Identifiable {
     case openAI = "OpenAI"
+    case anthropic = "Anthropic"
+    case alibaba = "Alibaba Cloud"
     case google = "Google"
     case xAI = "xAI"
 
@@ -12,6 +14,12 @@ nonisolated enum DataConfidence: String, Codable, Sendable {
     case high = "High"
     case medium = "Medium"
     case low = "Low"
+}
+
+nonisolated enum AccountBillingKind: String, Codable, Sendable {
+    case subscription
+    case apiKey
+    case local
 }
 
 nonisolated enum ActivityPeriod: String, CaseIterable, Codable, Sendable, Identifiable {
@@ -117,6 +125,7 @@ nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {
     let id: String
     let sortOrder: Int
     let provider: ProviderKind
+    let billingKind: AccountBillingKind?
     let displayName: String
     let email: String?
     let plan: String?

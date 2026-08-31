@@ -94,32 +94,31 @@ nonisolated struct CodexProvider: UsageProvider {
 
         let lifetime = int64(summary?["lifetimeTokens"])
         let serverDaily = parseDailyBuckets(dailyBuckets)
-        let daily = localUsage.dailyActivity.isEmpty
-            ? serverDaily
-            : localUsage.dailyActivity
+        let daily = mergeDailyActivity(
+            server: serverDaily,
+            local: localUsage.dailyActivity
+        )
         let localByPeriod = Dictionary(
             uniqueKeysWithValues: localUsage.periodActivity.map { ($0.period, $0) }
         )
-        let total30d = localByPeriod[.thirtyDays]?.tokens
-            ?? sumDaily(daily, days: 30)
 
         let activity = [
             PeriodActivity(
                 period: .today,
-                tokens: localByPeriod[.today]?.tokens ?? sumDaily(daily, days: 1),
-                turns: localByPeriod[.today]?.turns ?? sumTurns(daily, days: 1),
+                tokens: sumDaily(daily, days: 1),
+                turns: sumTurns(daily, days: 1),
                 costUSD: localByPeriod[.today]?.costUSD
             ),
             PeriodActivity(
                 period: .sevenDays,
-                tokens: localByPeriod[.sevenDays]?.tokens ?? sumDaily(daily, days: 7),
-                turns: localByPeriod[.sevenDays]?.turns ?? sumTurns(daily, days: 7),
+                tokens: sumDaily(daily, days: 7),
+                turns: sumTurns(daily, days: 7),
                 costUSD: localByPeriod[.sevenDays]?.costUSD
             ),
             PeriodActivity(
                 period: .thirtyDays,
-                tokens: total30d,
-                turns: localByPeriod[.thirtyDays]?.turns ?? sumTurns(daily, days: 30),
+                tokens: sumDaily(daily, days: 30),
+                turns: sumTurns(daily, days: 30),
                 costUSD: localByPeriod[.thirtyDays]?.costUSD
             ),
             PeriodActivity(
@@ -139,6 +138,7 @@ nonisolated struct CodexProvider: UsageProvider {
             id: providerID,
             sortOrder: sortOrder,
             provider: .openAI,
+            billingKind: .subscription,
             displayName: displayName,
             email: email,
             plan: plan,
@@ -147,14 +147,16 @@ nonisolated struct CodexProvider: UsageProvider {
             dailyActivity: daily,
             modelActivity: localUsage.modelActivity,
             updatedAt: Date(),
-            sourceLabel: localUsage.indexedFiles > 0
-                ? "Codex app-server + 本机增量索引"
-                : "Codex app-server",
+            sourceLabel: !serverDaily.isEmpty && localUsage.indexedFiles > 0
+                ? "Codex 服务端日统计 + 本机模型索引"
+                : (localUsage.indexedFiles > 0
+                    ? "Codex 本机增量索引"
+                    : "Codex app-server"),
             confidence: responses.hasError || activityError != nil ? .medium : .high,
             statusMessage: combinedStatus.isEmpty ? nil : combinedStatus,
-            schemaVersion: 3,
+            schemaVersion: 4,
             quotaAvailable: !windows.isEmpty,
-            activityAvailable: activityError == nil
+            activityAvailable: activityError == nil || !serverDaily.isEmpty
         )
     }
 
@@ -263,6 +265,29 @@ nonisolated struct CodexProvider: UsageProvider {
             )
         }
         .sorted { $0.date < $1.date }
+    }
+
+    static func mergeDailyActivity(
+        server: [DailyActivity],
+        local: [DailyActivity]
+    ) -> [DailyActivity] {
+        let calendar = Calendar.current
+        var localByDay = Dictionary(
+            uniqueKeysWithValues: local.map {
+                (calendar.startOfDay(for: $0.date), $0)
+            }
+        )
+        var merged = server.map { item in
+            let day = calendar.startOfDay(for: item.date)
+            let localItem = localByDay.removeValue(forKey: day)
+            return DailyActivity(
+                date: day,
+                tokens: item.tokens,
+                turns: localItem?.turns ?? 0
+            )
+        }
+        merged.append(contentsOf: localByDay.values)
+        return merged.sorted { $0.date < $1.date }
     }
 
     private static func sumDaily(_ values: [DailyActivity], days: Int) -> Int64 {

@@ -17,11 +17,13 @@ struct AIUsageView: View {
         )
     }
 
-    private var quotaAccounts: [AccountSnapshot] {
+    private var subscriptionAccounts: [AccountSnapshot] {
         store.accounts.filter { account in
-            account.quotaWindows.contains { window in
-                window.usedPercent != nil || window.resetsAt != nil
-            }
+            account.billingKind == .subscription
+                || (account.billingKind == nil && account.quotaWindows.contains { window in
+                    window.usedPercent != nil || window.resetsAt != nil
+                })
+                || (account.billingKind == nil && account.provider == .anthropic)
         }
     }
 
@@ -104,7 +106,7 @@ struct AIUsageView: View {
         ContentUnavailableView {
             Label("还没有用量数据", systemImage: "chart.bar.xaxis")
         } description: {
-            Text("刷新后会读取已登录的 Codex、AGY 与 Grok 数据；单个来源失败不会影响其他来源。")
+            Text("刷新后会读取已配置的 Codex、Claude、AGY、Grok 与百炼 Token Plan 数据；单个来源失败不会影响其他来源。")
         }
         .frame(maxWidth: .infinity, minHeight: 320)
     }
@@ -133,7 +135,7 @@ struct AIUsageView: View {
 
     @ViewBuilder
     private var quotaSection: some View {
-        if !quotaAccounts.isEmpty {
+        if !subscriptionAccounts.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeading(
                     title: "订阅额度",
@@ -146,7 +148,7 @@ struct AIUsageView: View {
                     ],
                     spacing: 12
                 ) {
-                    ForEach(quotaAccounts) { account in
+                    ForEach(subscriptionAccounts) { account in
                         QuotaAccountCard(
                             account: account,
                             isRefreshing: store.isRefreshing(providerID: account.id),
@@ -246,7 +248,7 @@ struct AIUsageView: View {
             )
             .dashboardCard()
 
-            Text("Codex 费用按 OpenAI 官方 API 单价估算，不代表 Plus 实际扣款，且不含工具调用费；Grok 优先采用本地日志费用。AGY 暂无模型级明细，不计入本区。")
+            Text("Codex、Claude 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。百炼 Credits 不从 Token 反推；AGY 暂无模型级明细。")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
         }
@@ -659,7 +661,7 @@ private struct UsageHeadlineCard: View {
                 }
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
-                .help("Codex 为 API 等价估算，Grok 优先采用日志费用；都不代表订阅账单。")
+                .help("Codex、Claude 与 Grok 为标准 API 等价参考，Grok 日志费用优先；都不代表订阅账单。百炼不估算 Credits。")
             }
         }
         .padding(16)
@@ -817,21 +819,26 @@ private struct QuotaAccountCard: View {
             }
 
             VStack(spacing: 0) {
-                ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
-                    if index > 0 {
-                        Divider()
-                            .opacity(0.28)
-                            .padding(.vertical, 12)
-                    }
+                if windows.isEmpty {
+                    UnavailableQuotaRow(provider: account.provider)
+                } else {
+                    ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
+                        if index > 0 {
+                            Divider()
+                                .opacity(0.28)
+                                .padding(.vertical, 12)
+                        }
 
-                    QuotaWindowRow(
-                        provider: account.provider,
-                        window: window
-                    )
+                        QuotaWindowRow(
+                            provider: account.provider,
+                            window: window
+                        )
+                    }
                 }
             }
         }
         .padding(15)
+        .frame(maxWidth: .infinity, minHeight: 200, alignment: .top)
         .dashboardCard()
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.2),
@@ -839,6 +846,35 @@ private struct QuotaAccountCard: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(account.displayName)订阅额度")
+    }
+}
+
+private struct UnavailableQuotaRow: View {
+    let provider: ProviderKind
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "clock.badge.questionmark")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(provider.tint)
+                .frame(width: 22, height: 22)
+                .background(provider.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("暂无可验证的额度窗口")
+                    .font(.system(size: 10, weight: .medium))
+
+                Text("未提供 5 小时窗口时仍保留订阅卡片；本机 Token 与参考费用继续统计。")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("暂无可验证的订阅额度窗口")
     }
 }
 
@@ -935,7 +971,11 @@ private struct ModelBreakdownTable: View {
                                 Text(row.displayName)
                                     .font(.system(size: 11, weight: .medium))
                                     .lineLimit(1)
-                                Text("\(row.provider.rawValue) · \(row.turns) 次")
+                                Text(
+                                    row.turns == 0 && row.usage.totalTokens == 0
+                                        ? "\(row.provider.rawValue) · 活动中，等待用量落盘"
+                                        : "\(row.provider.rawValue) · \(row.turns) 次"
+                                )
                                     .font(.system(size: 8))
                                     .foregroundStyle(.tertiary)
                             }
@@ -1184,6 +1224,10 @@ private extension ProviderKind {
         switch self {
         case .openAI:
             return Color(red: 0.18, green: 0.67, blue: 0.48)
+        case .anthropic:
+            return Color(red: 0.82, green: 0.46, blue: 0.30)
+        case .alibaba:
+            return Color(red: 0.39, green: 0.30, blue: 0.92)
         case .google:
             return Color(red: 0.26, green: 0.52, blue: 0.96)
         case .xAI:
@@ -1195,6 +1239,10 @@ private extension ProviderKind {
         switch self {
         case .openAI:
             return "sparkles"
+        case .anthropic:
+            return "sun.max.fill"
+        case .alibaba:
+            return "cloud.fill"
         case .google:
             return "diamond.fill"
         case .xAI:

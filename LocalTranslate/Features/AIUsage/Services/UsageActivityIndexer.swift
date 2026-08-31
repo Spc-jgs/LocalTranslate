@@ -71,6 +71,42 @@ nonisolated final class UsageActivityIndexer: @unchecked Sendable {
         }
     }
 
+    func scanClaude(
+        providerID: String,
+        claudeHome: URL,
+        databaseURL: URL = UsageIndex.defaultDatabaseURL
+    ) async throws -> IndexedActivitySnapshot {
+        try await UsageScanExecutor.shared.submit(
+            budget: .standard(maximumBytes: 64 * 1024 * 1024, seconds: 2)
+        ) { cancellation, budget in
+            try withRecoveringUsageIndex(databaseURL: databaseURL) { index in
+                try ClaudeIncrementalIndexer(
+                    providerID: providerID,
+                    accountID: providerID,
+                    claudeHome: claudeHome
+                ).scan(index: index, cancellation: cancellation, budget: budget)
+            }
+        }
+    }
+
+    func scanQwen(
+        providerID: String,
+        qwenHome: URL,
+        databaseURL: URL = UsageIndex.defaultDatabaseURL
+    ) async throws -> IndexedActivitySnapshot {
+        try await UsageScanExecutor.shared.submit(
+            budget: .standard(maximumBytes: 16 * 1024 * 1024, seconds: 1)
+        ) { cancellation, budget in
+            try withRecoveringUsageIndex(databaseURL: databaseURL) { index in
+                try QwenIncrementalIndexer(
+                    providerID: providerID,
+                    accountID: providerID,
+                    qwenHome: qwenHome
+                ).scan(index: index, cancellation: cancellation, budget: budget)
+            }
+        }
+    }
+
     private func removeLegacyGrokCache() {
         let fileManager = FileManager.default
         let cacheRoot = fileManager.urls(
@@ -525,8 +561,9 @@ private nonisolated struct CodexIncrementalIndexer {
 }
 
 private nonisolated struct GrokIncrementalIndexer {
-    static let parserVersion = 2
+    static let parserVersion = 5
     static let target = Data("turn_completed".utf8)
+    static let turnStartedTarget = Data("turn_started".utf8)
 
     let providerID: String
     let accountID: String
@@ -573,8 +610,15 @@ private nonisolated struct GrokIncrementalIndexer {
                 startOffset: startOffset,
                 meter: &meter
             ) { line, endOffset in
-                guard line.range(of: Self.target) != nil else { return }
-                events.append(contentsOf: parse(line: line, endOffset: endOffset))
+                if candidate.url.lastPathComponent == "events.jsonl" {
+                    guard line.range(of: Self.turnStartedTarget) != nil else { return }
+                    if let event = parseTurnStarted(line: line, endOffset: endOffset) {
+                        events.append(event)
+                    }
+                } else {
+                    guard line.range(of: Self.target) != nil else { return }
+                    events.append(contentsOf: parse(line: line, endOffset: endOffset))
+                }
             }
 
             let digest = anchor(for: candidate.url, parsedOffset: result.safeOffset)
@@ -646,7 +690,9 @@ private nonisolated struct GrokIncrementalIndexer {
         ) else { return [] }
 
         var result: [(URL, UsageFileMetadata)] = []
-        for case let file as URL in enumerator where file.lastPathComponent == "updates.jsonl" {
+        for case let file as URL in enumerator
+            where file.lastPathComponent == "updates.jsonl"
+                || file.lastPathComponent == "events.jsonl" {
             if let metadata = UsageFileMetadata(url: file) {
                 result.append((file, metadata))
             }
@@ -670,13 +716,20 @@ private nonisolated struct GrokIncrementalIndexer {
         var result: [IndexedUsageEvent] = []
         let topBreakdown = tokenBreakdown(usage)
         let topCost = trustedCost(usage)
+        var detailCostsComplete = true
 
         if let modelUsage = usage["modelUsage"] as? [String: Any] {
             for (modelID, raw) in modelUsage.sorted(by: { $0.key < $1.key }) {
                 guard let model = raw as? [String: Any] else { continue }
                 let breakdown = tokenBreakdown(model)
                 guard breakdown.totalTokens > 0 else { continue }
-                let cost = trustedCost(model)
+                let recordedCost = trustedCost(model)
+                let estimatedCost = UsageReferencePriceCatalog.estimateGrok(
+                    modelID: modelID,
+                    usage: breakdown
+                )
+                let cost = recordedCost ?? estimatedCost
+                detailCostsComplete = detailCostsComplete && cost != nil
                 result.append(
                     IndexedUsageEvent(
                         eventKey: "\(promptID)::\(modelID)",
@@ -685,7 +738,9 @@ private nonisolated struct GrokIncrementalIndexer {
                         usage: breakdown,
                         turns: 1,
                         costUSD: cost,
-                        costKind: cost == nil ? nil : .recorded
+                        costKind: recordedCost != nil
+                            ? .recorded
+                            : (estimatedCost == nil ? nil : .estimated)
                     )
                 )
             }
@@ -698,6 +753,10 @@ private nonisolated struct GrokIncrementalIndexer {
                     $0.add($1.usage)
                 }
             }
+            let estimatedDetailTotal = detailCostsComplete
+                ? result.compactMap(\.costUSD).reduce(0, +)
+                : nil
+            let totalCost = topCost ?? estimatedDetailTotal
             result.append(
                 IndexedUsageEvent(
                     eventKey: "\(promptID)::total",
@@ -705,8 +764,10 @@ private nonisolated struct GrokIncrementalIndexer {
                     modelID: "__total__:grok",
                     usage: total,
                     turns: 1,
-                    costUSD: topCost,
-                    costKind: topCost == nil ? nil : .recorded
+                    costUSD: totalCost,
+                    costKind: topCost != nil
+                        ? .recorded
+                        : (totalCost == nil ? nil : .estimated)
                 )
             )
         } else {
@@ -724,6 +785,32 @@ private nonisolated struct GrokIncrementalIndexer {
             )
         }
         return result
+    }
+
+    private func parseTurnStarted(
+        line: Data,
+        endOffset _: Int64
+    ) -> IndexedUsageEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              object["type"] as? String == "turn_started",
+              let modelID = object["model_id"] as? String, !modelID.isEmpty,
+              let date = parseISODate(object["ts"] as? String) else {
+            return nil
+        }
+        let sessionID = (object["session_id"] as? String).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? "unknown"
+        let turn = int64(object["turn_number"])
+        let usageModelID = modelID.hasSuffix("-build") ? modelID : "\(modelID)-build"
+        return IndexedUsageEvent(
+            eventKey: "model-evidence::\(sessionID)::\(turn)",
+            occurredAt: date,
+            modelID: "__detail__:\(usageModelID)",
+            usage: TokenBreakdown(),
+            turns: 0,
+            costUSD: nil,
+            costKind: nil
+        )
     }
 
     private func turnDate(
@@ -767,6 +854,13 @@ private nonisolated struct GrokIncrementalIndexer {
             : cleaned
     }
 
+    private func parseISODate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
     private func int64(_ value: Any?) -> Int64 {
         if let number = value as? NSNumber { return max(0, number.int64Value) }
         if let string = value as? String, let number = Int64(string) {
@@ -785,6 +879,325 @@ private nonisolated struct GrokIncrementalIndexer {
         if let value = value as? Bool { return value }
         if let value = value as? NSNumber { return value.boolValue }
         return false
+    }
+}
+
+private nonisolated struct ClaudeIncrementalIndexer {
+    let providerID: String
+    let accountID: String
+    let claudeHome: URL
+
+    func scan(
+        index: UsageIndex,
+        cancellation: UsageScanCancellation,
+        budget: UsageScanBudget
+    ) throws -> IndexedActivitySnapshot {
+        try LocalJSONLUsageIndexer(
+            providerID: providerID,
+            accountID: accountID,
+            source: .claude(claudeHome)
+        ).scan(index: index, cancellation: cancellation, budget: budget)
+    }
+}
+
+private nonisolated struct QwenIncrementalIndexer {
+    let providerID: String
+    let accountID: String
+    let qwenHome: URL
+
+    func scan(
+        index: UsageIndex,
+        cancellation: UsageScanCancellation,
+        budget: UsageScanBudget
+    ) throws -> IndexedActivitySnapshot {
+        try LocalJSONLUsageIndexer(
+            providerID: providerID,
+            accountID: accountID,
+            source: .qwen(qwenHome)
+        ).scan(index: index, cancellation: cancellation, budget: budget)
+    }
+}
+
+private nonisolated enum LocalJSONLUsageSource {
+    case claude(URL)
+    case qwen(URL)
+
+    var parserVersion: Int {
+        switch self {
+        case .claude: 3
+        case .qwen: 1
+        }
+    }
+}
+
+private nonisolated struct LocalJSONLUsageIndexer {
+    let providerID: String
+    let accountID: String
+    let source: LocalJSONLUsageSource
+
+    func scan(
+        index: UsageIndex,
+        cancellation: UsageScanCancellation,
+        budget: UsageScanBudget
+    ) throws -> IndexedActivitySnapshot {
+        var meter = UsageScanMeter(budget: budget, cancellation: cancellation)
+        let files = candidateFiles()
+        let livePaths = Set(files.map { $0.metadata.path })
+        var catchUpPending = false
+
+        for candidate in files {
+            try meter.check()
+            let old = try index.sourceFile(
+                providerID: providerID,
+                accountID: accountID,
+                path: candidate.metadata.path
+            )
+            if unchanged(
+                state: old,
+                metadata: candidate.metadata,
+                parserVersion: source.parserVersion
+            ) { continue }
+
+            if meter.isExhausted {
+                catchUpPending = true
+                break
+            }
+
+            let resumes = canResumeJSONL(
+                state: old,
+                metadata: candidate.metadata,
+                parserVersion: source.parserVersion,
+                file: candidate.url
+            )
+            let startOffset = resumes ? old?.parsedOffset ?? 0 : 0
+            var events: [IndexedUsageEvent] = []
+            let result = try scanJSONLLines(
+                file: candidate.url,
+                startOffset: startOffset,
+                meter: &meter
+            ) { line, endOffset in
+                events.append(contentsOf: parse(line: line, endOffset: endOffset))
+            }
+
+            let digest = anchor(for: candidate.url, parsedOffset: result.safeOffset)
+            let postScanMetadata = UsageFileMetadata(url: candidate.url)
+            let sourceChanged = postScanMetadata.map {
+                $0.inode != candidate.metadata.inode
+                    || $0.fileSize != candidate.metadata.fileSize
+                    || $0.modificationTimeMS != candidate.metadata.modificationTimeMS
+            } ?? true
+            let status = sourceChanged
+                ? "retryable_failure"
+                : (result.reachedEOF ? "complete" : "partial")
+            catchUpPending = catchUpPending || status == "partial"
+                || status == "retryable_failure"
+
+            try index.commit(
+                IndexedFileCommit(
+                    providerID: providerID,
+                    accountID: accountID,
+                    path: candidate.metadata.path,
+                    inode: candidate.metadata.inode,
+                    modificationTimeMS: candidate.metadata.modificationTimeMS,
+                    fileSize: candidate.metadata.fileSize,
+                    parsedOffset: result.safeOffset,
+                    parserVersion: source.parserVersion,
+                    cursorState: nil,
+                    anchorOffset: digest?.offset,
+                    anchorSHA256: digest?.digest,
+                    scanStatus: status,
+                    replaceExistingEvents: !resumes,
+                    events: events
+                )
+            )
+
+            if meter.isExhausted {
+                catchUpPending = true
+                break
+            }
+        }
+
+        if !catchUpPending {
+            try index.pruneMissingFiles(
+                providerID: providerID,
+                accountID: accountID,
+                livePaths: livePaths
+            )
+        }
+        try index.setRefreshState(
+            providerID: providerID,
+            accountID: accountID,
+            succeeded: true,
+            catchUpPending: catchUpPending
+        )
+        return try index.aggregate(
+            providerID: providerID,
+            accountID: accountID,
+            modelDisplayName: displayModelName,
+            catchUpPending: catchUpPending
+        )
+    }
+
+    private func candidateFiles() -> [(url: URL, metadata: UsageFileMetadata)] {
+        switch source {
+        case .claude(let home):
+            let root = home.appendingPathComponent("projects", isDirectory: true)
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { return [] }
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: Date())
+            let start90 = calendar.date(byAdding: .day, value: -89, to: today) ?? today
+            var files: [(url: URL, metadata: UsageFileMetadata)] = []
+            for case let file as URL in enumerator where file.pathExtension == "jsonl" {
+                guard let metadata = UsageFileMetadata(url: file),
+                      metadata.modificationDate >= start90 else { continue }
+                files.append((file, metadata))
+            }
+            return files.sorted { $0.metadata.modificationDate > $1.metadata.modificationDate }
+
+        case .qwen(let home):
+            let file = home.appendingPathComponent("usage_record.jsonl")
+            guard let metadata = UsageFileMetadata(url: file) else { return [] }
+            return [(file, metadata)]
+        }
+    }
+
+    private func parse(line: Data, endOffset: Int64) -> [IndexedUsageEvent] {
+        switch source {
+        case .claude:
+            return parseClaude(line: line, endOffset: endOffset)
+        case .qwen:
+            return parseQwen(line: line, endOffset: endOffset)
+        }
+    }
+
+    private func parseClaude(line: Data, endOffset: Int64) -> [IndexedUsageEvent] {
+        guard line.range(of: Data("\"usage\"".utf8)) != nil,
+              let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              object["type"] as? String == "assistant",
+              let timestamp = parseISO8601(object["timestamp"]),
+              let message = object["message"] as? [String: Any],
+              let usageObject = message["usage"] as? [String: Any] else {
+            return []
+        }
+
+        let freshInput = positiveInt64(usageObject["input_tokens"])
+        let cachedRead = positiveInt64(usageObject["cache_read_input_tokens"])
+        let cacheCreationDetails = usageObject["cache_creation"] as? [String: Any]
+        let oneHourCacheCreation = positiveInt64(
+            cacheCreationDetails?["ephemeral_1h_input_tokens"]
+        )
+        let fiveMinuteCacheCreation = positiveInt64(
+            cacheCreationDetails?["ephemeral_5m_input_tokens"]
+        )
+        let cacheCreation = max(
+            positiveInt64(usageObject["cache_creation_input_tokens"]),
+            oneHourCacheCreation + fiveMinuteCacheCreation
+        )
+        let output = positiveInt64(usageObject["output_tokens"])
+        let details = usageObject["output_tokens_details"] as? [String: Any]
+        let reasoning = min(output, positiveInt64(details?["thinking_tokens"]))
+        let usage = TokenBreakdown(
+            inputTokens: freshInput + cachedRead + cacheCreation,
+            outputTokens: output,
+            cachedReadTokens: cachedRead,
+            cacheCreationTokens: cacheCreation,
+            reasoningTokens: reasoning
+        )
+        guard usage.totalTokens > 0 else { return [] }
+
+        let messageID = (message["id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let requestID = (object["requestId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let eventKey = requestID ?? messageID ?? String(endOffset)
+        let model = (message["model"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? "claude-unknown"
+        let cost = UsageReferencePriceCatalog.estimateClaude(
+            modelID: model,
+            usage: usage,
+            oneHourCacheCreationTokens: oneHourCacheCreation
+        )
+        return [
+            IndexedUsageEvent(
+                eventKey: eventKey,
+                occurredAt: timestamp,
+                modelID: model,
+                usage: usage,
+                turns: 1,
+                costUSD: cost,
+                costKind: cost == nil ? nil : .estimated
+            )
+        ]
+    }
+
+    private func parseQwen(line: Data, endOffset: Int64) -> [IndexedUsageEvent] {
+        guard line.range(of: Data("\"models\"".utf8)) != nil,
+              let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              let timestampMS = number(object["timestamp"]), timestampMS > 0,
+              let models = object["models"] as? [String: Any] else {
+            return []
+        }
+        let sessionID = (object["sessionId"] as? String).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? "offset-\(endOffset)"
+        let date = Date(timeIntervalSince1970: timestampMS / 1_000)
+
+        return models.sorted(by: { $0.key < $1.key }).compactMap { modelID, raw in
+            guard let model = raw as? [String: Any] else { return nil }
+            let cached = positiveInt64(model["cachedTokens"])
+            let thoughts = positiveInt64(model["thoughtsTokens"])
+            let usage = TokenBreakdown(
+                inputTokens: positiveInt64(model["inputTokens"]),
+                outputTokens: positiveInt64(model["outputTokens"]) + thoughts,
+                cachedReadTokens: cached,
+                reasoningTokens: thoughts
+            )
+            guard usage.totalTokens > 0 else { return nil }
+            return IndexedUsageEvent(
+                eventKey: "\(sessionID)::\(modelID)",
+                occurredAt: date,
+                modelID: modelID,
+                usage: usage,
+                turns: Int(max(1, positiveInt64(model["requests"]))),
+                costUSD: nil,
+                costKind: nil
+            )
+        }
+    }
+
+    private func displayModelName(_ modelID: String) -> String {
+        switch source {
+        case .claude:
+            return modelID
+                .replacingOccurrences(of: "claude-", with: "Claude ")
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        case .qwen:
+            return modelID
+        }
+    }
+
+    private func parseISO8601(_ value: Any?) -> Date? {
+        guard let text = value as? String else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
+    private func positiveInt64(_ value: Any?) -> Int64 {
+        if let number = value as? NSNumber { return max(0, number.int64Value) }
+        if let string = value as? String, let number = Int64(string) {
+            return max(0, number)
+        }
+        return 0
+    }
+
+    private func number(_ value: Any?) -> Double? {
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let string = value as? String { return Double(string) }
+        return nil
     }
 }
 
@@ -819,7 +1232,7 @@ private nonisolated func agyProgressCallback(
 }
 
 private nonisolated struct AGYIncrementalIndexer {
-    static let parserVersion = 1
+    static let parserVersion = 2
     static let rowsPerDatabase = 10_000
     static let totalRowLimit = 50_000
 
@@ -952,12 +1365,38 @@ private nonisolated struct AGYIncrementalIndexer {
         maximumRows: Int
     ) throws -> (events: [IndexedUsageEvent], lastRowID: Int64, reachedEnd: Bool) {
         var database: OpaquePointer?
-        let openResult = sqlite3_open_v2(
-            file.path,
-            &database,
-            SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX,
-            nil
-        )
+        let fileManager = FileManager.default
+        let hasWALSidecars = fileManager.fileExists(atPath: file.path + "-wal")
+            || fileManager.fileExists(atPath: file.path + "-shm")
+
+        func openImmutable(_ pointer: inout OpaquePointer?) -> Int32 {
+            if let existing = pointer { sqlite3_close_v2(existing) }
+            pointer = nil
+            var components = URLComponents(
+                url: file.absoluteURL,
+                resolvingAgainstBaseURL: false
+            )
+            components?.queryItems = [URLQueryItem(name: "immutable", value: "1")]
+            let immutableURI = components?.string ?? file.absoluteString + "?immutable=1"
+            return sqlite3_open_v2(
+                immutableURI,
+                &pointer,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_URI,
+                nil
+            )
+        }
+
+        var openResult: Int32
+        if hasWALSidecars {
+            openResult = sqlite3_open_v2(
+                file.path,
+                &database,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX,
+                nil
+            )
+        } else {
+            openResult = openImmutable(&database)
+        }
         guard openResult == SQLITE_OK, let database else {
             if let database { sqlite3_close_v2(database) }
             return ([], afterRowID, false)

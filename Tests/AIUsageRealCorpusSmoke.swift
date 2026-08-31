@@ -38,6 +38,24 @@ struct AIUsageRealCorpusSmoke {
                         providerID: "agy-antigravity"
                     )
                 }
+            ),
+            (
+                "claude-subscription",
+                {
+                    try await UsageActivityIndexer.shared.scanClaude(
+                        providerID: "claude-subscription",
+                        claudeHome: home.appendingPathComponent(".claude", isDirectory: true)
+                    )
+                }
+            ),
+            (
+                "alibaba-qwen-token-plan-cn",
+                {
+                    try await UsageActivityIndexer.shared.scanQwen(
+                        providerID: "alibaba-qwen-token-plan-cn",
+                        qwenHome: home.appendingPathComponent(".qwen", isDirectory: true)
+                    )
+                }
             )
         ]
 
@@ -57,6 +75,50 @@ struct AIUsageRealCorpusSmoke {
                 )
             } catch {
                 print("\(name): soft-failure=\(type(of: error))")
+            }
+        }
+
+        let providers: [any UsageProvider] = [
+            CodexProvider(
+                providerID: "codex-plus-a",
+                displayName: "Codex Plus A",
+                codexHome: home.appendingPathComponent(".codex", isDirectory: true),
+                sortOrder: 10
+            ),
+            CodexProvider(
+                providerID: "codex-plus-b",
+                displayName: "Codex Plus B",
+                codexHome: home.appendingPathComponent(".codex_account2", isDirectory: true),
+                sortOrder: 20
+            ),
+            ClaudeProvider(),
+            GrokProvider()
+        ]
+        for provider in providers {
+            do {
+                let snapshot = try await provider.fetch()
+                let today = snapshot.dailyActivity.first {
+                    Calendar.current.isDateInToday($0.date)
+                }?.tokens ?? 0
+                let yesterdayDate = Calendar.current.date(
+                    byAdding: .day,
+                    value: -1,
+                    to: Date()
+                ) ?? Date()
+                let yesterday = snapshot.dailyActivity.first {
+                    Calendar.current.isDate($0.date, inSameDayAs: yesterdayDate)
+                }?.tokens ?? 0
+                let pricedModels = snapshot.modelActivity.filter {
+                    $0.period == .today && $0.costUSD != nil
+                }.count
+                print(
+                    "\(provider.providerID): provider-today=\(today) "
+                        + "provider-yesterday=\(yesterday) "
+                        + "priced-models=\(pricedModels) "
+                        + "quota-windows=\(snapshot.quotaWindows.count)"
+                )
+            } catch {
+                print("\(provider.providerID): provider-soft-failure=\(type(of: error))")
             }
         }
     }
