@@ -2,7 +2,8 @@
 
 LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译、截图 OCR 翻译、系统音频实时字幕和 AI 用量看板放在同一个菜单栏 App 中。翻译与语音内容默认只发送到本机 Ollama。
 
-当前稳定版：[v1.2.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.2.0)
+当前已发布版本：[v1.3.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.3.0)。
+仓库 `MARKETING_VERSION` 已推进到 1.4.0，对应 tag 尚未创建。
 
 ## 功能
 
@@ -16,6 +17,8 @@ LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译�
 ### 实时字幕
 
 - `⌥⇧C`：打开、暂停或恢复实时字幕。
+- 源语言、字幕呈现、字号与点击穿透可在字幕条工具栏或设置的「实时字幕」页调整。
+- 点击穿透开启后字幕条把鼠标事件交给下层窗口，可从菜单栏或设置页关闭。
 - 使用 Core Audio private process tap 捕获系统输出，不安装虚拟声卡，也不创建屏幕共享流。
 - 使用 Apple `SpeechAnalyzer` / `SpeechTranscriber` 做端侧增量 ASR，再使用本地 Ollama 翻译。
 - 支持英语、日语、韩语、普通话、粤语、法语、德语、西班牙语和俄语；可切换双语、仅译文或仅原文。
@@ -34,7 +37,9 @@ audio range 用于消除 rolling overlap；`sessionID / segmentID / revision` �
 
 ### AI 用量看板
 
-- 汇总本机 Codex、Antigravity 和 Grok 数据源。
+- 汇总本机 Codex、Claude、Antigravity、Grok 与百炼 Token Plan 数据源。
+- 账号来源可配置：Codex 账号可增删改（每个对应一个 `CODEX_HOME` 目录），
+  其余固定路径来源可单独启停。入口在用量页右上角「账号来源」。
 - 模型用量按 `modelID` 全局归一，账号卡片聚焦配额窗口和时间汇总。
 - 使用内存与磁盘增量缓存；单个 Provider 失败时保留其他可用数据。
 
@@ -83,6 +88,8 @@ ollama serve
 | `Esc` | 隐藏浮窗或取消截图 |
 | `⌘,` | 打开设置 |
 
+快捷键当前不可自定义。若某个组合已被其他 App 占用，设置页的「全局快捷键」会标记为「已被占用」。
+
 ## 隐私与资源
 
 - 文本、截图 OCR 结果和语音转录默认只发送到 `127.0.0.1` 的 Ollama；如果修改 Ollama Base URL，数据边界随该配置变化。
@@ -98,6 +105,14 @@ ollama serve
 
 ## 开发
 
+状态测试（实时字幕增量契约与 AI 用量增量索引）：
+
+```bash
+./Scripts/run-state-tests.sh
+```
+
+Release 构建：
+
 ```bash
 xcodebuild -project LocalTranslate.xcodeproj \
   -scheme LocalTranslate \
@@ -109,6 +124,6 @@ xcodebuild -project LocalTranslate.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-GitHub Actions 在 `macos-15` runner 上显式选择 Xcode 26.x。推送到 `main` 会执行 CI；推送 `v*` 标签会生成 DMG 和 ZIP，并创建 GitHub Release。
+GitHub Actions 在 `macos-15` runner 上显式选择 Xcode 26.x，先跑状态测试再执行 Release 构建。推送到 `main` 会执行 CI；推送 `v*` 标签会生成 DMG 和 ZIP，并创建 GitHub Release。
 
 架构不变量、实时字幕增量契约、权限检查和发布流程见 [AGENTS.md](AGENTS.md)。
