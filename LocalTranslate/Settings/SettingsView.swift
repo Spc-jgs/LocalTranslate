@@ -3,6 +3,7 @@ import Foundation
 
 private enum PersonalToolPage: String, CaseIterable, Identifiable {
     case translation = "翻译"
+    case liveSubtitles = "实时字幕"
     case usage = "AI 用量"
 
     var id: String { rawValue }
@@ -11,6 +12,8 @@ private enum PersonalToolPage: String, CaseIterable, Identifiable {
         switch self {
         case .translation:
             return "translate"
+        case .liveSubtitles:
+            return "captions.bubble"
         case .usage:
             return "chart.bar.xaxis"
         }
@@ -20,6 +23,8 @@ private enum PersonalToolPage: String, CaseIterable, Identifiable {
         switch self {
         case .translation:
             return "翻译设置"
+        case .liveSubtitles:
+            return "实时字幕"
         case .usage:
             return "用量与额度"
         }
@@ -29,8 +34,21 @@ private enum PersonalToolPage: String, CaseIterable, Identifiable {
         switch self {
         case .translation:
             return "本地模型、风格与运行参数"
+        case .liveSubtitles:
+            return "源语言、字幕呈现与叠加行为"
         case .usage:
             return "今日模型、费用与订阅额度"
+        }
+    }
+
+    var sidebarSubtitle: String {
+        switch self {
+        case .translation:
+            return "Ollama 与快捷键"
+        case .liveSubtitles:
+            return "语言、字号与叠加"
+        case .usage:
+            return "Token、成本与额度"
         }
     }
 }
@@ -39,6 +57,12 @@ struct SettingsView: View {
 
     @ObservedObject
     private var usageStore = UsageStore.shared
+
+    @ObservedObject
+    private var hotKeyRegistry = HotKeyRegistry.shared
+
+    @ObservedObject
+    private var liveSubtitles = LiveSubtitlesViewModel.shared
 
     @State
     private var selectedPage: PersonalToolPage = .translation
@@ -110,6 +134,9 @@ struct SettingsView: View {
                     case .translation:
                         translationSettingsContent
 
+                    case .liveSubtitles:
+                        liveSubtitlesSettingsContent
+
                     case .usage:
                         AIUsageView(
                             store: usageStore
@@ -119,9 +146,14 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // 固定 980x700 在 13 寸机型上会顶满可用高度，且三页内容长度差异很大。
         .frame(
-            width: 980,
-            height: 700
+            minWidth: 860,
+            idealWidth: 980,
+            maxWidth: .infinity,
+            minHeight: 540,
+            idealHeight: 700,
+            maxHeight: .infinity
         )
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
@@ -161,6 +193,220 @@ struct SettingsView: View {
             .padding(24)
         }
         .scrollIndicators(.visible)
+    }
+
+    // MARK: - Live Subtitles Content
+
+    private var liveSubtitlesSettingsContent: some View {
+
+        ScrollView(.vertical) {
+
+            VStack(
+                alignment: .leading,
+                spacing: 18
+            ) {
+
+                liveSubtitlesCaptureSection
+
+                liveSubtitlesAppearanceSection
+
+                liveSubtitlesPermissionSection
+            }
+            .padding(24)
+        }
+        .scrollIndicators(.visible)
+    }
+
+    private var liveSubtitlesCaptureSection: some View {
+
+        settingsSection(
+            title: "识别与呈现",
+            systemImage: "waveform"
+        ) {
+
+            VStack(spacing: 11) {
+
+                settingsRow(
+                    title: "源语言"
+                ) {
+
+                    // 走 ViewModel 而不是直接写 UserDefaults：切换语言要重建
+                    // 识别会话，绕过它会让运行中的字幕与设置不一致。
+                    Picker(
+                        "",
+                        selection: Binding(
+                            get: { liveSubtitles.sourceLanguage },
+                            set: { liveSubtitles.setSourceLanguage($0) }
+                        )
+                    ) {
+                        ForEach(SubtitleSourceLanguage.allCases) { language in
+                            Text(language.displayName)
+                                .tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 170)
+                }
+
+                rowDivider
+
+                settingsRow(
+                    title: "字幕呈现"
+                ) {
+
+                    Picker(
+                        "",
+                        selection: Binding(
+                            get: { liveSubtitles.displayMode },
+                            set: { liveSubtitles.setDisplayMode($0) }
+                        )
+                    ) {
+                        ForEach(SubtitleDisplayMode.allCases) { mode in
+                            Text(mode.title)
+                                .tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 170)
+                }
+
+                rowDivider
+
+                detailRow(
+                    title: "当前状态",
+                    value: liveSubtitles.isPreparing
+                        ? "准备中"
+                        : (liveSubtitles.isRunning ? "同传中" : "未运行")
+                )
+            }
+        }
+    }
+
+    private var liveSubtitlesAppearanceSection: some View {
+
+        settingsSection(
+            title: "字幕条外观",
+            systemImage: "textformat.size"
+        ) {
+
+            VStack(spacing: 11) {
+
+                settingsRow(
+                    title: "字号"
+                ) {
+
+                    HStack(spacing: 10) {
+
+                        Text("\(Int(liveSubtitles.fontSize))")
+                            .font(
+                                .system(
+                                    size: 12,
+                                    weight: .medium,
+                                    design: .monospaced
+                                )
+                            )
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+
+                        Stepper(
+                            "",
+                            onIncrement: liveSubtitles.canIncreaseFontSize
+                                ? {
+                                    liveSubtitles.adjustFontSize(
+                                        delta: AppSettings.liveFontSizeStep
+                                    )
+                                }
+                                : nil,
+                            onDecrement: liveSubtitles.canDecreaseFontSize
+                                ? {
+                                    liveSubtitles.adjustFontSize(
+                                        delta: -AppSettings.liveFontSizeStep
+                                    )
+                                }
+                                : nil
+                        )
+                        .labelsHidden()
+                    }
+                }
+
+                rowDivider
+
+                settingsRow(
+                    title: "点击穿透"
+                ) {
+
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { liveSubtitles.isClickThrough },
+                            set: { newValue in
+                                guard newValue != liveSubtitles.isClickThrough
+                                else { return }
+                                liveSubtitles.toggleClickThrough()
+                            }
+                        )
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+
+                Text(
+                    "点击穿透开启后，字幕条把鼠标事件交给下层窗口，"
+                        + "它自己的工具条也不再响应点击；"
+                        + "可从这里或菜单栏关闭。"
+                )
+                .font(
+                    .system(size: 10)
+                )
+                .foregroundStyle(.tertiary)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
+            }
+        }
+    }
+
+    private var liveSubtitlesPermissionSection: some View {
+
+        settingsSection(
+            title: "权限边界",
+            systemImage: "lock.shield"
+        ) {
+
+            VStack(spacing: 11) {
+
+                detailRow(
+                    title: "音频来源",
+                    value: "Core Audio 系统输出 Tap"
+                )
+
+                detailRow(
+                    title: "语音识别",
+                    value: "Apple 端侧 SpeechAnalyzer"
+                )
+
+                detailRow(
+                    title: "翻译",
+                    value: "本机 Ollama · \(model)"
+                )
+
+                rowDivider
+
+                Text(
+                    "实时字幕不使用麦克风，也不创建屏幕共享流；"
+                        + "截图 OCR 的屏幕权限与本链路相互独立。"
+                )
+                .font(
+                    .system(size: 10)
+                )
+                .foregroundStyle(.tertiary)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
+            }
+        }
     }
 
     // MARK: - Navigation
@@ -247,7 +493,7 @@ struct SettingsView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.primary)
 
-                    Text(page == .translation ? "Ollama 与快捷键" : "Token、成本与额度")
+                    Text(page.sidebarSubtitle)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
@@ -321,6 +567,12 @@ struct SettingsView: View {
                 ? "刷新 Ollama 状态"
                 : "刷新 AI 用量"
             )
+            .opacity(
+                selectedPage == .liveSubtitles ? 0 : 1
+            )
+            .allowsHitTesting(
+                selectedPage != .liveSubtitles
+            )
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 15)
@@ -330,6 +582,8 @@ struct SettingsView: View {
         switch selectedPage {
         case .translation:
             return isLoading
+        case .liveSubtitles:
+            return false
         case .usage:
             return usageStore.isRefreshing
         }
@@ -341,6 +595,8 @@ struct SettingsView: View {
             Task {
                 await refresh()
             }
+        case .liveSubtitles:
+            break
         case .usage:
             Task {
                 await usageStore.refresh()
@@ -810,30 +1066,82 @@ struct SettingsView: View {
             systemImage: "keyboard"
         ) {
 
-            settingsRow(
-                title: "取词翻译 / 打开浮窗"
-            ) {
+            VStack(spacing: 11) {
 
-                Text("⌥ ⇧ T")
-                    .font(
-                        .system(
-                            size: 12,
-                            weight: .medium,
-                            design: .rounded
-                        )
-                    )
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background {
+                ForEach(
+                    Array(HotKeyAction.allCases.enumerated()),
+                    id: \.element.id
+                ) { index, action in
 
-                        RoundedRectangle(
-                            cornerRadius: 7,
-                            style: .continuous
-                        )
-                        .fill(
-                            Color.primary.opacity(0.06)
-                        )
+                    if index > 0 {
+                        rowDivider
                     }
+
+                    settingsRow(
+                        title: action.title
+                    ) {
+
+                        HStack(spacing: 8) {
+
+                            // 组合被其他 App 占用时，注册会静默失败；
+                            // 不显示出来，用户只会觉得「按了没反应」。
+                            if !hotKeyRegistry.isAvailable(action) {
+
+                                Label(
+                                    "已被占用",
+                                    systemImage:
+                                        "exclamationmark.triangle.fill"
+                                )
+                                .font(
+                                    .system(size: 10, weight: .medium)
+                                )
+                                .foregroundStyle(.orange)
+                                .help(
+                                    "该组合已被其他 App 注册，"
+                                        + "LocalTranslate 无法接收它。"
+                                )
+                            }
+
+                            Text(action.displayShortcut)
+                                .font(
+                                    .system(
+                                        size: 12,
+                                        weight: .medium,
+                                        design: .rounded
+                                    )
+                                )
+                                .foregroundStyle(
+                                    hotKeyRegistry.isAvailable(action)
+                                        ? .primary
+                                        : .secondary
+                                )
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                                .background {
+
+                                    RoundedRectangle(
+                                        cornerRadius: 7,
+                                        style: .continuous
+                                    )
+                                    .fill(
+                                        Color.primary.opacity(0.06)
+                                    )
+                                }
+                        }
+                    }
+                }
+
+                rowDivider
+
+                Text("快捷键目前不可自定义。")
+                    .font(
+                        .system(size: 10)
+                    )
+                    .foregroundStyle(.tertiary)
+                    .frame(
+                        maxWidth: .infinity,
+                        alignment: .leading
+                    )
             }
         }
     }

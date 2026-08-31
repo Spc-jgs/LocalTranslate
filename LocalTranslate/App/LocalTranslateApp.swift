@@ -226,19 +226,26 @@ final class AppDelegate:
         let hotKeyManager =
             HotKeyManager()
 
-        hotKeyManager.register(
-            onTranslate: { [weak self] in
-                self?.handleTranslateHotKey()
-            },
-            onScreenshot: { [weak self] in
-                self?.handleScreenshotHotKey()
-            },
-            onLiveSubtitles: { [weak self] in
-                self?.handleLiveSubtitlesHotKey()
-            },
-            onMiniHUD: { [weak self] in
-                self?.handleMiniHUDHotKey()
-            }
+        let unavailable =
+            hotKeyManager.register(
+                handlers: [
+                    .translateSelection: { [weak self] in
+                        self?.handleTranslateHotKey()
+                    },
+                    .screenshotOCR: { [weak self] in
+                        self?.handleScreenshotHotKey()
+                    },
+                    .liveSubtitles: { [weak self] in
+                        self?.handleLiveSubtitlesHotKey()
+                    },
+                    .miniHUD: { [weak self] in
+                        self?.handleMiniHUDHotKey()
+                    }
+                ]
+            )
+
+        HotKeyRegistry.shared.update(
+            unavailable: unavailable
         )
 
         self.hotKeyManager =

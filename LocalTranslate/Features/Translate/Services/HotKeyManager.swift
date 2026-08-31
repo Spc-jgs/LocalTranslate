@@ -1,42 +1,151 @@
 import Foundation
+import Combine
 import Carbon.HIToolbox
 import AppKit
+
+/// 一个全局快捷键的完整定义。
+///
+/// 原先四个快捷键各有一份 ref、action、时间戳和防抖分支，注册代码也复制了
+/// 四遍；新增或改键必须同时改五个地方。现在只需要在这里加一个 case。
+nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
+
+    case translateSelection
+    case miniHUD
+    case screenshotOCR
+    case liveSubtitles
+
+    var id: String { rawValue }
+
+    /// Carbon `EventHotKeyID` 的数值标识，注册后不可更改。
+    var hotKeyID: UInt32 {
+        switch self {
+        case .translateSelection: return 1
+        case .screenshotOCR: return 2
+        case .liveSubtitles: return 3
+        case .miniHUD: return 4
+        }
+    }
+
+    var keyCode: UInt32 {
+        switch self {
+        case .translateSelection: return UInt32(kVK_ANSI_T)
+        case .miniHUD: return UInt32(kVK_ANSI_D)
+        case .screenshotOCR: return UInt32(kVK_ANSI_S)
+        case .liveSubtitles: return UInt32(kVK_ANSI_C)
+        }
+    }
+
+    var modifiers: UInt32 {
+        UInt32(optionKey | shiftKey)
+    }
+
+    /// 连按抑制窗口。截图与字幕启动较重，给更长的间隔。
+    var debounceInterval: TimeInterval {
+        switch self {
+        case .translateSelection, .miniHUD: return 0.4
+        case .screenshotOCR, .liveSubtitles: return 0.6
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .translateSelection: return "划词翻译 / 打开浮窗"
+        case .miniHUD: return "划词气泡"
+        case .screenshotOCR: return "截图 OCR 翻译"
+        case .liveSubtitles: return "实时字幕"
+        }
+    }
+
+    var displayShortcut: String {
+        switch self {
+        case .translateSelection: return "⌥ ⇧ T"
+        case .miniHUD: return "⌥ ⇧ D"
+        case .screenshotOCR: return "⌥ ⇧ S"
+        case .liveSubtitles: return "⌥ ⇧ C"
+        }
+    }
+}
+
+/// 快捷键注册结果，供设置界面展示。
+///
+/// `RegisterEventHotKey` 的返回值原先被全部丢弃：某个组合已被其他 App 占用
+/// 时用户只会觉得「按了没反应」，没有任何提示。
+@MainActor
+final class HotKeyRegistry: ObservableObject {
+
+    static let shared = HotKeyRegistry()
+
+    @Published private(set) var unavailableActions: Set<HotKeyAction> = []
+
+    private init() {}
+
+    func update(unavailable: Set<HotKeyAction>) {
+        unavailableActions = unavailable
+    }
+
+    func isAvailable(_ action: HotKeyAction) -> Bool {
+        !unavailableActions.contains(action)
+    }
+}
 
 final class HotKeyManager {
 
     private static let signature: OSType = 0x4C54524E // 'LTRN'
 
-    private var translateHotKeyRef: EventHotKeyRef?
-    private var screenshotHotKeyRef: EventHotKeyRef?
-    private var liveSubtitlesHotKeyRef: EventHotKeyRef?
-    private var miniHUDHotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [HotKeyAction: EventHotKeyRef] = [:]
     private var eventHandlerRef: EventHandlerRef?
 
-    private var translateAction: (() -> Void)?
-    private var screenshotAction: (() -> Void)?
-    private var liveSubtitlesAction: (() -> Void)?
-    private var miniHUDAction: (() -> Void)?
-
-    private var lastTranslateTimestamp: TimeInterval = 0
-    private var lastScreenshotTimestamp: TimeInterval = 0
-    private var lastLiveSubtitlesTimestamp: TimeInterval = 0
-    private var lastMiniHUDTimestamp: TimeInterval = 0
+    private var actions: [UInt32: (action: HotKeyAction, handler: () -> Void)] = [:]
+    private var lastFiredAt: [UInt32: TimeInterval] = [:]
     private let lock = NSLock()
 
+    /// 注册全部快捷键，返回未能注册成功的动作。
+    @discardableResult
     func register(
-        onTranslate: @escaping () -> Void,
-        onScreenshot: @escaping () -> Void,
-        onLiveSubtitles: @escaping () -> Void = {},
-        onMiniHUD: @escaping () -> Void = {}
-    ) {
-        self.translateAction = onTranslate
-        self.screenshotAction = onScreenshot
-        self.liveSubtitlesAction = onLiveSubtitles
-        self.miniHUDAction = onMiniHUD
+        handlers: [HotKeyAction: () -> Void]
+    ) -> Set<HotKeyAction> {
+
+        lock.lock()
+        for (action, handler) in handlers {
+            actions[action.hotKeyID] = (action, handler)
+        }
+        lock.unlock()
 
         guard let target = GetEventDispatcherTarget() else {
-            return
+            return Set(handlers.keys)
         }
+
+        installHandlerIfNeeded(target: target)
+
+        var unavailable: Set<HotKeyAction> = []
+
+        for action in HotKeyAction.allCases where handlers[action] != nil {
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                action.keyCode,
+                action.modifiers,
+                EventHotKeyID(
+                    signature: Self.signature,
+                    id: action.hotKeyID
+                ),
+                target,
+                0,
+                &ref
+            )
+
+            if status == noErr, let ref {
+                hotKeyRefs[action] = ref
+            } else {
+                // 通常是该组合已被其他 App 抢占。
+                unavailable.insert(action)
+            }
+        }
+
+        return unavailable
+    }
+
+    private func installHandlerIfNeeded(target: EventTargetRef) {
+        guard eventHandlerRef == nil else { return }
 
         let eventSpecs = [
             EventTypeSpec(
@@ -78,57 +187,12 @@ final class HotKeyManager {
                     &hotKeyID
                 )
 
-                guard status == noErr, hotKeyID.signature == HotKeyManager.signature else {
+                guard status == noErr,
+                      hotKeyID.signature == HotKeyManager.signature else {
                     return noErr
                 }
 
-                let now = ProcessInfo.processInfo.systemUptime
-
-                manager.lock.lock()
-                defer { manager.lock.unlock() }
-
-                if hotKeyID.id == 1 {
-                    // 划词翻译防抖 400ms
-                    guard now - manager.lastTranslateTimestamp > 0.4 else {
-                        return noErr
-                    }
-                    manager.lastTranslateTimestamp = now
-
-                    DispatchQueue.main.async {
-                        manager.translateAction?()
-                    }
-                } else if hotKeyID.id == 2 {
-                    // 截图翻译防抖 600ms
-                    guard now - manager.lastScreenshotTimestamp > 0.6 else {
-                        return noErr
-                    }
-                    manager.lastScreenshotTimestamp = now
-
-                    DispatchQueue.main.async {
-                        manager.screenshotAction?()
-                    }
-                } else if hotKeyID.id == 3 {
-                    // 实时字幕防抖 600ms
-                    guard now - manager.lastLiveSubtitlesTimestamp > 0.6 else {
-                        return noErr
-                    }
-                    manager.lastLiveSubtitlesTimestamp = now
-
-                    DispatchQueue.main.async {
-                        manager.liveSubtitlesAction?()
-                    }
-                } else if hotKeyID.id == 4 {
-                    // 划词气泡防抖 400ms
-                    guard now - manager.lastMiniHUDTimestamp > 0.4 else {
-                        return noErr
-                    }
-                    manager.lastMiniHUDTimestamp = now
-
-                    DispatchQueue.main.async {
-                        manager.miniHUDAction?()
-                    }
-                }
-
+                manager.fire(hotKeyID.id)
                 return noErr
             },
             eventSpecs.count,
@@ -136,76 +200,34 @@ final class HotKeyManager {
             pointer,
             &eventHandlerRef
         )
+    }
 
-        // 1. 划词/剪贴板翻译: ⌥⇧T (kVK_ANSI_T = 17, optionKey = 2048, shiftKey = 512)
-        let translateID = EventHotKeyID(
-            signature: Self.signature,
-            id: 1
-        )
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_T),
-            UInt32(optionKey | shiftKey),
-            translateID,
-            target,
-            0,
-            &translateHotKeyRef
-        )
+    private func fire(_ hotKeyID: UInt32) {
+        let now = ProcessInfo.processInfo.systemUptime
 
-        // 2. 截图翻译: ⌥⇧S (kVK_ANSI_S = 1, optionKey = 2048, shiftKey = 512)
-        let screenshotID = EventHotKeyID(
-            signature: Self.signature,
-            id: 2
-        )
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_S),
-            UInt32(optionKey | shiftKey),
-            screenshotID,
-            target,
-            0,
-            &screenshotHotKeyRef
-        )
+        lock.lock()
+        guard let entry = actions[hotKeyID] else {
+            lock.unlock()
+            return
+        }
 
-        // 3. 实时字幕: ⌥⇧C (kVK_ANSI_C = 8, optionKey = 2048, shiftKey = 512)
-        let liveSubtitlesID = EventHotKeyID(
-            signature: Self.signature,
-            id: 3
-        )
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_C),
-            UInt32(optionKey | shiftKey),
-            liveSubtitlesID,
-            target,
-            0,
-            &liveSubtitlesHotKeyRef
-        )
+        let last = lastFiredAt[hotKeyID] ?? 0
+        guard now - last > entry.action.debounceInterval else {
+            lock.unlock()
+            return
+        }
+        lastFiredAt[hotKeyID] = now
+        let handler = entry.handler
+        lock.unlock()
 
-        // 4. 划词气泡: ⌥⇧D (kVK_ANSI_D = 2, optionKey = 2048, shiftKey = 512)
-        let miniHUDID = EventHotKeyID(
-            signature: Self.signature,
-            id: 4
-        )
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_D),
-            UInt32(optionKey | shiftKey),
-            miniHUDID,
-            target,
-            0,
-            &miniHUDHotKeyRef
-        )
+        DispatchQueue.main.async {
+            handler()
+        }
     }
 
     deinit {
-        if let translateHotKeyRef {
-            UnregisterEventHotKey(translateHotKeyRef)
-        }
-        if let screenshotHotKeyRef {
-            UnregisterEventHotKey(screenshotHotKeyRef)
-        }
-        if let liveSubtitlesHotKeyRef {
-            UnregisterEventHotKey(liveSubtitlesHotKeyRef)
-        }
-        if let miniHUDHotKeyRef {
-            UnregisterEventHotKey(miniHUDHotKeyRef)
+        for ref in hotKeyRefs.values {
+            UnregisterEventHotKey(ref)
         }
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
