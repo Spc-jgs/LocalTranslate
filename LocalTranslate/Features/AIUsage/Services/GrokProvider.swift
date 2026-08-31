@@ -42,7 +42,7 @@ struct GrokProvider: UsageProvider {
                 : "Grok billing + 本机增量索引",
             confidence: remoteOutcome.errorMessage == nil ? .high : .medium,
             statusMessage: combinedStatus.isEmpty ? nil : combinedStatus,
-            schemaVersion: 4,
+            schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: remoteOutcome.snapshot != nil,
             activityAvailable: true
         )

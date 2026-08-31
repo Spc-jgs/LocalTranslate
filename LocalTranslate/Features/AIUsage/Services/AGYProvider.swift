@@ -12,35 +12,131 @@ struct AGYProvider: UsageProvider {
             throw UsageHubError.invalidResponse("未检测到 ~/.gemini 目录")
         }
 
-        let email = findEmail(in: geminiDir)
-        let local = try await UsageActivityIndexer.shared.scanAGY(
-            providerID: providerID
-        )
-        let status = local.catchUpPending
-            ? "AGY 活动量按本地轨迹字节数估算；历史正在分片补齐。"
-            : "AGY 暂无可验证的实时额度与 Token 明细；活动量按本地轨迹字节数估算。"
+        async let quotaResult = fetchQuota()
+        async let activityResult = fetchActivity()
+        let quota = await quotaResult
+        let activity = await activityResult
+
+        if case .failure(let quotaError) = quota,
+           case .failure(let activityError) = activity {
+            throw UsageHubError.invalidResponse(
+                "AGY 额度与活动均不可用：\(quotaError.localizedDescription)；"
+                    + activityError.localizedDescription
+            )
+        }
+
+        let quotaValue = try? quota.get()
+        let activityValue = (try? activity.get()) ?? Self.emptyActivity
+        let quotaError: String?
+        switch quota {
+        case .success:
+            quotaError = nil
+        case .failure(let error):
+            quotaError = error.localizedDescription
+        }
+        let activityError: String?
+        let activityAvailable: Bool
+        switch activity {
+        case .success:
+            activityError = nil
+            activityAvailable = true
+        case .failure(let error):
+            activityError = error.localizedDescription
+            activityAvailable = false
+        }
+        let activityIsEstimated = activityValue.modelActivity.contains {
+            $0.modelID == "agy-activity-estimate"
+        }
+        let activityHasWaitingModel = activityValue.modelActivity.contains {
+            $0.modelID != "agy-activity-estimate"
+                && $0.turns == 0
+                && $0.usage.totalTokens == 0
+        }
+        let status = [
+            quotaError.map { "实时额度不可用：\($0)" },
+            activityAvailable && activityIsEstimated
+                ? "本地活动量是按轨迹字节数换算的估算值，不代表官方 Token 用量。"
+                : nil,
+            activityHasWaitingModel
+                ? "已识别本机会话模型；缺少可验证事件时间的 Token 不归入今日，等待上游落盘。"
+                : nil,
+            activityValue.catchUpPending ? "活动历史正在分片补齐。" : nil,
+            activityError.map { "活动索引不可用：\($0)" }
+        ].compactMap { $0 }.joined(separator: "；")
+
+        let sourceLabel: String
+        switch (quotaValue != nil, activityAvailable) {
+        case (true, true):
+            if activityIsEstimated {
+                sourceLabel = "AGY 本机额度接口 + 本机活动估算"
+            } else if activityHasWaitingModel {
+                sourceLabel = "AGY 本机额度接口 + 本机会话模型证据"
+            } else {
+                sourceLabel = "AGY 本机额度接口 + 本机 Token 索引"
+            }
+        case (true, false):
+            sourceLabel = "AGY 本机额度接口"
+        case (false, true):
+            if activityIsEstimated {
+                sourceLabel = "AGY 本机增量索引（活动估算）"
+            } else if activityHasWaitingModel {
+                sourceLabel = "AGY 本机会话模型证据"
+            } else {
+                sourceLabel = "AGY 本机 Token 索引"
+            }
+        case (false, false):
+            sourceLabel = "AGY 数据不可用"
+        }
 
         return AccountSnapshot(
             id: providerID,
             sortOrder: sortOrder,
             provider: .google,
-            billingKind: .local,
+            billingKind: quotaValue == nil ? .local : .subscription,
             displayName: "Antigravity (AGY)",
-            email: email,
-            plan: "Google AI Developer",
-            quotaWindows: [],
-            activity: local.periodActivity,
-            dailyActivity: local.dailyActivity,
-            modelActivity: [],
+            email: quotaValue?.email ?? findEmail(in: geminiDir),
+            plan: quotaValue?.plan,
+            quotaWindows: quotaValue?.quotaWindows ?? [],
+            activity: activityValue.periodActivity,
+            dailyActivity: activityValue.dailyActivity,
+            modelActivity: activityValue.modelActivity,
             updatedAt: Date(),
-            sourceLabel: "AGY 本机增量索引（字符量估算）",
-            confidence: .low,
+            sourceLabel: sourceLabel,
+            confidence: activityIsEstimated || activityHasWaitingModel
+                ? .low
+                : (quotaValue == nil ? .medium : .high),
             statusMessage: status,
-            schemaVersion: 4,
-            quotaAvailable: false,
-            activityAvailable: true
+            schemaVersion: AccountSnapshot.currentSchemaVersion,
+            quotaAvailable: quotaValue != nil,
+            activityAvailable: activityAvailable
         )
     }
+
+    private func fetchQuota() async -> Result<AGYLocalQuotaSnapshot, Error> {
+        do {
+            return .success(try await AGYLocalQuotaClient().fetch())
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func fetchActivity() async -> Result<IndexedActivitySnapshot, Error> {
+        do {
+            return .success(
+                try await UsageActivityIndexer.shared.scanAGY(providerID: providerID)
+            )
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private static let emptyActivity = IndexedActivitySnapshot(
+        periodActivity: [],
+        dailyActivity: [],
+        modelActivity: [],
+        indexedFiles: 0,
+        catchUpPending: false
+    )
 
     private func findEmail(in geminiDir: URL) -> String? {
         let oauthURL = geminiDir.appendingPathComponent("jetski-standalone-oauth-token")

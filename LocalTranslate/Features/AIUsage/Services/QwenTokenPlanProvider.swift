@@ -57,7 +57,7 @@ struct QwenTokenPlanProvider: UsageProvider {
             sourceLabel: "Qwen Code usage_record.jsonl",
             confidence: activity == nil ? .low : .high,
             statusMessage: status,
-            schemaVersion: 4,
+            schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
             activityAvailable: true
         )

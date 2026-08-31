@@ -58,10 +58,21 @@ run_suite "AIUsageProviderFixtureTests" \
   LocalTranslate/Features/AIUsage/Models/UsageModels.swift \
   LocalTranslate/Features/AIUsage/Services/UsageIndex.swift \
   LocalTranslate/Features/AIUsage/Services/UsageScanExecutor.swift \
+  LocalTranslate/Features/AIUsage/Services/AGYUsageProtoParser.swift \
   LocalTranslate/Features/AIUsage/Services/UsageActivityIndexer.swift \
   LocalTranslate/Features/AIUsage/Services/UsageReferencePriceCatalog.swift \
   LocalTranslate/Features/AIUsage/Services/CodexProvider.swift \
   Tests/AIUsageProviderFixtureTests.swift
+
+run_suite "AGYLocalQuotaClientTests" \
+  LocalTranslate/Features/AIUsage/Models/UsageModels.swift \
+  LocalTranslate/Features/AIUsage/Services/AGYLocalQuotaClient.swift \
+  Tests/AGYLocalQuotaClientTests.swift
+
+run_suite "AIUsageDashboardTests" \
+  LocalTranslate/Features/AIUsage/Models/UsageModels.swift \
+  LocalTranslate/Features/AIUsage/Models/UsageDashboardSnapshot.swift \
+  Tests/AIUsageDashboardTests.swift
 
 echo "──────────────────────────────────────────"
 

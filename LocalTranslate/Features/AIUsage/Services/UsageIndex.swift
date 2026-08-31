@@ -419,6 +419,8 @@ nonisolated final class UsageIndex {
                 startDate = calendar.date(byAdding: .day, value: -6, to: today)
             case .thirtyDays:
                 startDate = calendar.date(byAdding: .day, value: -29, to: today)
+            case .ninetyDays:
+                startDate = calendar.date(byAdding: .day, value: -89, to: today)
             case .lifetime:
                 startDate = nil
             }
@@ -477,12 +479,16 @@ nonisolated final class UsageIndex {
     ) throws -> [ModelActivity] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
+        let start7 = calendar.date(byAdding: .day, value: -6, to: today) ?? today
         let start30 = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        let start90 = calendar.date(byAdding: .day, value: -89, to: today) ?? today
         var result: [ModelActivity] = []
 
         for (period, start) in [
             (ActivityPeriod.today, today),
-            (ActivityPeriod.thirtyDays, start30)
+            (ActivityPeriod.sevenDays, start7),
+            (ActivityPeriod.thirtyDays, start30),
+            (ActivityPeriod.ninetyDays, start90)
         ] {
             let statement = try prepare(
                 """

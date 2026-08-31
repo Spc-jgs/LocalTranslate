@@ -178,8 +178,9 @@ Router 能在请求经过网关时直接记录模型与用量，但无法覆盖�
 
 ### 6.1 订阅额度
 
-Codex 5 小时、每周窗口来自账号对应的 app-server/API 返回。它们属于额度面，必须
-成组展示在同一账号卡片，不与模型使用量混合。
+Codex 5 小时、每周窗口来自账号对应的 app-server/API 返回；AGY 的 Gemini 与
+Claude/GPT 5 小时、每周窗口来自正在运行的 Antigravity 本机 language server。
+它们属于额度面，必须成组展示在同一账号卡片，不与模型使用量混合。
 
 ### 6.2 本地活动
 
@@ -187,7 +188,8 @@ Codex 5 小时、每周窗口来自账号对应的 app-server/API 返回。它�
 
 - Codex：`token_count.last_token_usage`；
 - Grok：`turn_completed.usage`；
-- AGY：无可靠 Token 字段时只提供现有字节估算，并维持低置信度。
+- AGY：优先读取 `gen_metadata.data` 中的模型、Token 与生成时间；有模型身份但尚无
+  可验证事件时间时只保留零 Token 模型证据，旧版仅含 `steps` 的库才回退字节估算。
 
 模型按 `modelID` 全局归一。账号卡片只展示账号额度与时间，不复制模型明细。今天
 模型表可以按 Provider 和账号过滤，但默认按全局 modelID 聚合。
@@ -812,7 +814,7 @@ SQLite 至少完成一次 Grok 提交并能生成等价快照后，才删除
   文件游标、AGY 数据库游标、事务提交、WAL、损坏隔离、时区重建、软失败保留和
   逐账号刷新均已接入；旧 Grok/AGY 对象 JSON cache store 与未使用的全量 scanner
   已从源码移除；
-- Tests：`AIUsageIndexTests` 6 项、`AIUsageProviderFixtureTests` 7 项真实执行通过，
+- Tests：`AIUsageIndexTests` 6 项、`AIUsageProviderFixtureTests` 14 项真实执行通过，
   覆盖事务、UPSERT、cascade、WAL 重开、串行、取消、Codex append/truncate/半行、
   Grok prompt 与多模型去重、AGY 文件命中/变化和损坏索引重建；
 - Build：Xcode 26 Debug 与 Release 无签名构建成功；Release 仍有一个既存的
@@ -826,3 +828,36 @@ SQLite 至少完成一次 Grok 提交并能生成等价快照后，才删除
   `0600`，旧 `grok_sessions_cache.json` 在新索引成功后已删除；
 - Experience：今日模型、费用、账号额度组合、单账号刷新和逐账号更新仍待用户验收；
 - External：未提交、未推送、未创建 Issue、标签、Release 或远端产物。
+
+### 22.1 2026-08-31 AGY 额度补充
+
+- Source：新增只连接 `127.0.0.1` 的 AGY 本机额度客户端，读取
+  `RetrieveUserQuotaSummary`，并用 `GetUserStatus` 补账号与套餐；额度失败与活动
+  索引失败相互隔离，旧活动估算继续作为保底；
+- Tests：新增 `AGYLocalQuotaClientTests`，覆盖当前 quota summary、oneof 兼容、
+  无有效额度拒绝、进程筛选、端口解析和端点构造；
+- Cache：快照 schema 升至 5，升级后会主动刷新旧的 AGY 无额度快照；
+- Test：`./Scripts/run-state-tests.sh` 全绿；新增 suite 的 5 项测试通过；
+- Build：Xcode 26.5 / macOS 26.5 SDK 的无签名 Release 构建通过；
+- Runtime：Antigravity 2.11.0 运行时真实读取到 4 个额度窗口；
+- Experience：额度卡片的视觉与交互仍待用户验收；
+- External：未提交、未推送、未创建 Issue、标签或 Release。
+
+### 22.2 2026-08-31 模型、额度 UI 与历史范围修复
+
+- Source：AGY 增量索引优先只读解析 `gen_metadata` protobuf 的模型、Token 与时间；
+  当前记录缺少事件时间时只用数据库 mtime 发布零 Token 模型证据，不把无时间 Token
+  归到今日；旧 `steps` 字节估算保留为兼容路径；
+- Source：历史模型统计新增 7/30/90 天聚合，跟随页面范围选择，不再固定读取 30 天；
+  快照 schema 升至 6，旧缓存会主动刷新；
+- UI：订阅额度按 Provider 原始语义顺序使用两列紧凑卡片，强化剩余额度、进度、重置
+  时间与刷新状态层级，并保留 Reduce Motion 与无障碍标签；
+- Test：`./Scripts/run-state-tests.sh` 全绿，共 5 个 suite、43 项断言；AGY fixture
+  覆盖真实 Token、无时间模型证据、增量与 immutable WAL，仪表盘 fixture 覆盖
+  7/30/90 天范围；
+- Build：Xcode 26.5 / macOS 26.5 SDK 无签名 Release 构建通过，仅保留既存的
+  `CodexProvider` `nonisolated(unsafe)` warning；
+- Runtime：真实 Antigravity 目录只读扫描 38 个数据库，读取到 4 个额度窗口，并在
+  今日模型中识别 `gemini-3.7-flash`；因当前记录没有可验证事件时间，Token 保持 0；
+- Experience：额度卡片视觉、长模型名和窗口缩放仍待用户验收；
+- External：未提交、未推送、未创建 Issue、标签或 Release。

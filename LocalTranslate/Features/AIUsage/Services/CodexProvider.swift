@@ -154,7 +154,7 @@ nonisolated struct CodexProvider: UsageProvider {
                     : "Codex app-server"),
             confidence: responses.hasError || activityError != nil ? .medium : .high,
             statusMessage: combinedStatus.isEmpty ? nil : combinedStatus,
-            schemaVersion: 4,
+            schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: !windows.isEmpty,
             activityAvailable: activityError == nil || !serverDaily.isEmpty
         )

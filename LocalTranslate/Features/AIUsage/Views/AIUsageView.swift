@@ -269,7 +269,7 @@ struct AIUsageView: View {
             )
             .dashboardCard()
 
-            Text("Codex、Claude 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。百炼 Credits 不从 Token 反推；AGY 暂无模型级明细。")
+            Text("Codex、Claude 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。百炼 Credits 不从 Token 反推；AGY 从本机会话库读取模型与 Token，暂不提供费用。")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
         }
@@ -281,7 +281,7 @@ struct AIUsageView: View {
                 sectionHeading(
                     title: "历史明细",
                     subtitle: breakdownMode == .model
-                        ? "模型明细采用各来源可验证的近 30 天数据"
+                        ? "模型明细采用各来源可验证的 \(historyRange.title)数据"
                         : "按日期汇总当前所选周期"
                 )
 
@@ -303,7 +303,7 @@ struct AIUsageView: View {
                 case .model:
                     ModelBreakdownTable(
                         rows: dashboard.models,
-                        emptyMessage: "近 30 天没有可验证的模型级使用记录"
+                        emptyMessage: "\(historyRange.title)内没有可验证的模型级使用记录"
                     )
                 case .day:
                     DailyBreakdownTable(points: dashboard.dailyTotals)
@@ -550,26 +550,30 @@ private struct QuotaAccountCard: View {
         account.quotaWindows.filter {
             $0.usedPercent != nil || $0.resetsAt != nil
         }
-        .sorted {
-            ($0.durationMinutes ?? .max) < ($1.durationMinutes ?? .max)
-        }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 9) {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 10) {
                 Image(systemName: account.provider.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(account.provider.tint)
-                    .frame(width: 30, height: 30)
-                    .background(account.provider.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                    .frame(width: 34, height: 34)
+                    .background(
+                        account.provider.tint.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    )
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(account.displayName)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .lineLimit(1)
 
-                    Text([account.email, account.plan].compactMap { $0 }.joined(separator: " · "))
+                    Text(
+                        [account.email, account.plan]
+                            .compactMap { $0 }
+                            .joined(separator: " · ")
+                    )
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -577,39 +581,49 @@ private struct QuotaAccountCard: View {
 
                 Spacer(minLength: 8)
 
-                if !isRefreshing {
-                    Text(account.updatedAt.formatted(date: .omitted, time: .shortened))
-                        .font(.system(size: 9, design: .rounded))
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
-                }
-
-                Button(action: onRefresh) {
+                Group {
                     if isRefreshing {
-                        ProgressView()
-                            .controlSize(.small)
+                        HStack(spacing: 5) {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text("更新中")
+                        }
                     } else {
-                        Image(systemName: "arrow.clockwise")
+                        Text(account.updatedAt.formatted(date: .omitted, time: .shortened))
+                            .monospacedDigit()
                     }
                 }
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.primary.opacity(0.045), in: Capsule())
+
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                        .rotationEffect(isRefreshing && !reduceMotion ? .degrees(180) : .zero)
+                }
                 .buttonStyle(.borderless)
-                .frame(width: 26, height: 26)
+                .frame(width: 28, height: 28)
+                .background(Color.primary.opacity(0.045), in: Circle())
                 .disabled(isRefreshing)
                 .help(isRefreshing ? "正在更新这个账号" : "只刷新这个账号")
+                .accessibilityLabel(isRefreshing ? "正在刷新" : "刷新\(account.displayName)")
             }
 
-            VStack(spacing: 0) {
-                if windows.isEmpty {
-                    UnavailableQuotaRow(provider: account.provider)
-                } else {
-                    ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
-                        if index > 0 {
-                            Divider()
-                                .opacity(0.28)
-                                .padding(.vertical, 12)
-                        }
-
-                        QuotaWindowRow(
+            if windows.isEmpty {
+                UnavailableQuotaRow(provider: account.provider)
+            } else {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 8),
+                        GridItem(.flexible(), spacing: 8)
+                    ],
+                    spacing: 8
+                ) {
+                    ForEach(windows) { window in
+                        QuotaWindowTile(
                             provider: account.provider,
                             window: window
                         )
@@ -617,15 +631,14 @@ private struct QuotaAccountCard: View {
                 }
             }
         }
-        .padding(15)
-        .frame(maxWidth: .infinity, minHeight: 200, alignment: .top)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .top)
         .dashboardCard()
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.2),
             value: isRefreshing
         )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(account.displayName)订阅额度")
     }
 }
 
@@ -658,7 +671,7 @@ private struct UnavailableQuotaRow: View {
     }
 }
 
-private struct QuotaWindowRow: View {
+private struct QuotaWindowTile: View {
     let provider: ProviderKind
     let window: QuotaWindow
 
@@ -673,51 +686,88 @@ private struct QuotaWindowRow: View {
         return provider.tint
     }
 
+    private var used: Double? {
+        window.usedPercent.map { max(0, min(100, $0)) }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .center, spacing: 6) {
                 Text(window.title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
 
                 Spacer()
 
+                Circle()
+                    .fill(remaining == nil ? Color.secondary : tint)
+                    .frame(width: 6, height: 6)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(remaining.map { "\(Int($0.rounded(.down)))%" } ?? "—")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(remaining == nil ? Color.secondary : tint)
                     .contentTransition(.numericText())
+
+                Text("剩余")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.primary.opacity(0.06))
-
+                    Capsule().fill(Color.primary.opacity(0.07))
                     if let remaining {
                         Capsule()
-                            .fill(tint)
-                            .frame(width: proxy.size.width * max(0, min(1, remaining / 100)))
+                            .fill(tint.gradient)
+                            .frame(
+                                width: proxy.size.width * max(0, min(1, remaining / 100))
+                            )
                     }
                 }
             }
-            .frame(height: 5)
+            .frame(height: 6)
 
-            HStack {
-                Text("剩余额度")
-                Spacer()
-                if let reset = window.resetsAt {
-                    Text("\(reset, style: .relative)重置")
-                        .help(reset.formatted(date: .abbreviated, time: .shortened))
+            HStack(spacing: 5) {
+                if let used {
+                    Text("已用 \(Int(used.rounded(.down)))%")
                 } else {
-                    Text("重置时间未知")
+                    Text("使用率未知")
                 }
+
+                Spacer(minLength: 4)
+
+                Label {
+                    if let reset = window.resetsAt {
+                        Text(reset, style: .relative)
+                            .help(reset.formatted(date: .abbreviated, time: .shortened))
+                    } else {
+                        Text("未知")
+                    }
+                } icon: {
+                    Image(systemName: "clock")
+                }
+                .labelStyle(.titleAndIcon)
             }
-            .font(.system(size: 9))
+            .font(.system(size: 8))
             .foregroundStyle(.tertiary)
+        }
+        .padding(10)
+        .background(
+            provider.tint.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(provider.tint.opacity(0.1), lineWidth: 0.5)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(window.title)额度")
-        .accessibilityValue(remaining.map { "剩余\(Int($0))%" } ?? "剩余未知")
+        .accessibilityValue(
+            remaining.map { "剩余\(Int($0))%" } ?? "剩余额度未知"
+        )
     }
 }
 
@@ -973,6 +1023,8 @@ private struct AccountSourceDisclosure: View {
             return "最近 7 天"
         case .thirtyDays:
             return "最近 30 天"
+        case .ninetyDays:
+            return "最近 90 天"
         case .lifetime:
             return "全部历史"
         }

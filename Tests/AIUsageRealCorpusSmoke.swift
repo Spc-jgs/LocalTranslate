@@ -4,6 +4,7 @@ import Foundation
 struct AIUsageRealCorpusSmoke {
     static func main() async {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        let requestedProviderIDs = Set(CommandLine.arguments.dropFirst())
         let sources: [(String, () async throws -> IndexedActivitySnapshot)] = [
             (
                 "codex-plus-a",
@@ -59,7 +60,8 @@ struct AIUsageRealCorpusSmoke {
             )
         ]
 
-        for (name, operation) in sources {
+        for (name, operation) in sources where requestedProviderIDs.isEmpty
+            || requestedProviderIDs.contains(name) {
             let clock = ContinuousClock()
             let start = clock.now
             do {
@@ -92,9 +94,11 @@ struct AIUsageRealCorpusSmoke {
                 sortOrder: 20
             ),
             ClaudeProvider(),
+            AGYProvider(),
             GrokProvider()
         ]
-        for provider in providers {
+        for provider in providers where requestedProviderIDs.isEmpty
+            || requestedProviderIDs.contains(provider.providerID) {
             do {
                 let snapshot = try await provider.fetch()
                 let today = snapshot.dailyActivity.first {
@@ -111,11 +115,17 @@ struct AIUsageRealCorpusSmoke {
                 let pricedModels = snapshot.modelActivity.filter {
                     $0.period == .today && $0.costUSD != nil
                 }.count
+                let todayModels = Set(
+                    snapshot.modelActivity
+                        .filter { $0.period == .today }
+                        .map(\.modelID)
+                ).sorted().joined(separator: ",")
                 print(
                     "\(provider.providerID): provider-today=\(today) "
                         + "provider-yesterday=\(yesterday) "
                         + "priced-models=\(pricedModels) "
-                        + "quota-windows=\(snapshot.quotaWindows.count)"
+                        + "quota-windows=\(snapshot.quotaWindows.count) "
+                        + "today-models=\(todayModels.isEmpty ? "none" : todayModels)"
                 )
             } catch {
                 print("\(provider.providerID): provider-soft-failure=\(type(of: error))")

@@ -2,6 +2,11 @@ import CryptoKit
 import Foundation
 import SQLite3
 
+private nonisolated let usageActivitySQLiteTransient = unsafeBitCast(
+    -1,
+    to: sqlite3_destructor_type.self
+)
+
 nonisolated final class UsageActivityIndexer: @unchecked Sendable {
     static let shared = UsageActivityIndexer()
 
@@ -1232,7 +1237,7 @@ private nonisolated func agyProgressCallback(
 }
 
 private nonisolated struct AGYIncrementalIndexer {
-    static let parserVersion = 2
+    static let parserVersion = 4
     static let rowsPerDatabase = 10_000
     static let totalRowLimit = 50_000
 
@@ -1274,7 +1279,7 @@ private nonisolated struct AGYIncrementalIndexer {
                 && old?.fileSize == candidate.metadata.fileSize
                 && old?.modificationTimeMS == candidate.metadata.modificationTimeMS
                 && old?.scanStatus == "partial"
-            let afterRowID = resumes ? old?.parsedOffset ?? 0 : 0
+            let afterRowID = resumes ? old?.parsedOffset ?? -1 : -1
             let result = try scanDatabase(
                 candidate.url,
                 modificationDate: candidate.metadata.modificationDate,
@@ -1326,7 +1331,7 @@ private nonisolated struct AGYIncrementalIndexer {
         return try index.aggregate(
             providerID: providerID,
             accountID: accountID,
-            modelDisplayName: { _ in "AGY 活动估算" },
+            modelDisplayName: displayModelName,
             catchUpPending: catchUpPending
         )
     }
@@ -1336,6 +1341,7 @@ private nonisolated struct AGYIncrementalIndexer {
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".gemini", isDirectory: true)
         let directories = [
+            gemini.appendingPathComponent("antigravity", isDirectory: true),
             gemini.appendingPathComponent("antigravity/conversations", isDirectory: true),
             gemini.appendingPathComponent("antigravity-cli/conversations", isDirectory: true)
         ]
@@ -1415,6 +1421,134 @@ private nonisolated struct AGYIncrementalIndexer {
         )
         defer { sqlite3_progress_handler(database, 0, nil, nil) }
 
+        if hasTable("gen_metadata", in: database) {
+            return try scanRecordedUsage(
+                database,
+                modificationDate: modificationDate,
+                afterRowID: afterRowID,
+                meter: &meter,
+                maximumRows: maximumRows
+            )
+        }
+        return try scanEstimatedUsage(
+            database,
+            modificationDate: modificationDate,
+            afterRowID: afterRowID,
+            meter: &meter,
+            maximumRows: maximumRows
+        )
+    }
+
+    private func hasTable(_ name: String, in database: OpaquePointer) -> Bool {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        let sql =
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        sqlite3_bind_text(statement, 1, name, -1, usageActivitySQLiteTransient)
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    private func scanRecordedUsage(
+        _ database: OpaquePointer,
+        modificationDate: Date,
+        afterRowID: Int64,
+        meter: inout UsageScanMeter,
+        maximumRows: Int
+    ) throws -> (events: [IndexedUsageEvent], lastRowID: Int64, reachedEnd: Bool) {
+        let sql =
+            """
+            SELECT idx, data, coalesce(length(data), 0)
+            FROM gen_metadata
+            WHERE idx > ?
+            ORDER BY idx
+            LIMIT ?
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            return ([], afterRowID, false)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, afterRowID)
+        sqlite3_bind_int(statement, 2, Int32(maximumRows + 1))
+
+        var events: [IndexedUsageEvent] = []
+        var lastRowID = afterRowID
+        var reachedEnd = false
+        var scannedRows = 0
+        while true {
+            try meter.check()
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE {
+                reachedEnd = true
+                break
+            }
+            if step == SQLITE_INTERRUPT { throw CancellationError() }
+            guard step == SQLITE_ROW else { break }
+
+            if scannedRows >= maximumRows {
+                reachedEnd = false
+                break
+            }
+
+            let payloadLength = max(0, sqlite3_column_int64(statement, 2))
+            let rowID = sqlite3_column_int64(statement, 0)
+            lastRowID = rowID
+            scannedRows += 1
+            try meter.record(bytes: Int(min(payloadLength, Int64(Int.max))))
+
+            guard let blob = sqlite3_column_blob(statement, 1) else { continue }
+            let blobSize = Int(sqlite3_column_bytes(statement, 1))
+            guard blobSize > 0 else { continue }
+            let data = Data(bytes: blob, count: blobSize)
+            guard let record = AGYUsageProtoParser.parse(data) else { continue }
+
+            let modelID = record.modelID ?? record.modelLabel ?? "agy-unknown"
+            let occurredAt: Date
+            let usage: TokenBreakdown
+            let turns: Int
+            let eventKey: String
+            if let recordedAt = record.occurredAt {
+                occurredAt = recordedAt
+                usage = record.usage
+                turns = record.usage.totalTokens > 0 ? 1 : 0
+                eventKey = record.responseID.map { "response::\($0)" }
+                    ?? "idx::\(rowID)"
+            } else {
+                // 新版 AGY 有时先写模型和 Token 计数、稍后才补事件时间。
+                // 未知时间的 Token 不能归到“今天”；只用数据库 mtime 发布零 Token 模型证据。
+                guard modelID != "agy-unknown" else { continue }
+                occurredAt = modificationDate
+                usage = TokenBreakdown()
+                turns = 0
+                eventKey = "model-evidence::\(modelID)"
+            }
+            events.append(
+                IndexedUsageEvent(
+                    eventKey: eventKey,
+                    occurredAt: occurredAt,
+                    modelID: modelID,
+                    usage: usage,
+                    turns: turns,
+                    costUSD: nil,
+                    costKind: nil
+                )
+            )
+        }
+
+        return (events, lastRowID, reachedEnd)
+    }
+
+    /// 兼容旧版只含 `steps` 的数据库；该路径没有 Token 真值，明确保留估算身份。
+    private func scanEstimatedUsage(
+        _ database: OpaquePointer,
+        modificationDate: Date,
+        afterRowID: Int64,
+        meter: inout UsageScanMeter,
+        maximumRows: Int
+    ) throws -> (events: [IndexedUsageEvent], lastRowID: Int64, reachedEnd: Bool) {
         let sql =
             """
             SELECT rowid, metadata,
@@ -1445,11 +1579,7 @@ private nonisolated struct AGYIncrementalIndexer {
             }
             if step == SQLITE_INTERRUPT { throw CancellationError() }
             guard step == SQLITE_ROW else { break }
-
-            if events.count >= maximumRows {
-                reachedEnd = false
-                break
-            }
+            if events.count >= maximumRows { break }
 
             let rowID = sqlite3_column_int64(statement, 0)
             let blob = sqlite3_column_blob(statement, 1)
@@ -1488,6 +1618,18 @@ private nonisolated struct AGYIncrementalIndexer {
             lastRowID,
             reachedEnd
         )
+    }
+
+    private func displayModelName(_ modelID: String) -> String {
+        if modelID == "agy-activity-estimate" { return "AGY 活动估算" }
+        if modelID == "agy-unknown" { return "AGY 未知模型" }
+        if modelID.lowercased().hasPrefix("gemini-") {
+            return modelID
+                .replacingOccurrences(of: "gemini-", with: "Gemini ")
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        }
+        return modelID
     }
 
     private func extractTimestamp(from data: Data) -> TimeInterval? {

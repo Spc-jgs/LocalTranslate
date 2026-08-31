@@ -5,7 +5,7 @@ import Combine
 final class UsageStore: ObservableObject {
     static let shared = UsageStore()
     static let automaticRefreshInterval: TimeInterval = 30 * 60
-    static let currentSnapshotSchemaVersion = 4
+    static let currentSnapshotSchemaVersion = AccountSnapshot.currentSchemaVersion
 
     @Published private(set) var accounts: [AccountSnapshot] = []
     @Published private(set) var refreshingProviderIDs: Set<String> = []

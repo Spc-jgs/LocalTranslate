@@ -40,6 +40,9 @@ audio range 用于消除 rolling overlap；`sessionID / segmentID / revision` �
 - 账号来源可配置：Codex 账号可增删改（每个对应一个 `CODEX_HOME` 目录），
   其余固定路径来源可单独启停。入口在用量页右上角「账号来源」。
 - 模型用量按 `modelID` 全局归一，账号卡片聚焦配额窗口和时间汇总。
+- Antigravity 运行时优先从其本机 language server 读取 Gemini 与 Claude/GPT 的
+  5 小时、每周额度；本机会话库提供可验证时间时统计模型 Token，尚无事件时间时
+  只保留零 Token 模型证据并标明等待落盘。
 - 使用内存与磁盘增量缓存；单个 Provider 失败时保留其他可用数据。
 
 ## 环境要求
@@ -94,7 +97,8 @@ ollama serve
 - 文本、截图 OCR 结果和语音转录默认只发送到 `127.0.0.1` 的 Ollama；如果修改 Ollama Base URL，数据边界随该配置变化。
 - 截图在临时目录中生成，读取后删除。
 - 实时字幕暂停或关闭时会结束识别输入，并销毁 IOProc、aggregate device 和 process tap，同时取消翻译任务并请求卸载模型。
-- AI 用量模块读取本机客户端数据；在刷新 Provider 官方额度时，相关客户端自身可能访问网络。
+- AI 用量模块读取本机客户端数据；Antigravity 额度请求只连接 `127.0.0.1`
+  上已运行的 language server，相关客户端自身仍可能访问网络刷新官方额度。
 
 ## 已知限制
 

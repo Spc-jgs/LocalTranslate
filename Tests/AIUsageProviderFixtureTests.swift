@@ -301,14 +301,47 @@ struct AIUsageProviderFixtureTests {
             expect(
                 sqlite3_exec(
                     database,
-                    "CREATE TABLE steps(metadata BLOB, step_payload BLOB);"
-                        + "INSERT INTO steps VALUES(zeroblob(0), zeroblob(350));"
-                        + "INSERT INTO steps VALUES(zeroblob(0), zeroblob(700));",
+                    "CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);",
                     nil,
                     nil,
                     nil
                 ) == SQLITE_OK,
                 "AGY fixture setup failed"
+            )
+            let now = Int64(Date().timeIntervalSince1970)
+            expect(
+                insertAGYTurn(
+                    database,
+                    idx: 0,
+                    model: "gemini-3.1-pro",
+                    input: 100,
+                    cacheRead: 20,
+                    output: 30,
+                    reasoning: 10,
+                    timestamp: now
+                ),
+                "AGY first recorded turn setup failed"
+            )
+            expect(
+                insertAGYTurn(
+                    database,
+                    idx: 1,
+                    model: "gemini-3.1-pro",
+                    input: 200,
+                    cacheRead: 40,
+                    output: 50,
+                    reasoning: 10,
+                    timestamp: now
+                ),
+                "AGY second recorded turn setup failed"
+            )
+            expect(
+                insertAGYModelEvidence(
+                    database,
+                    idx: 2,
+                    model: "gemini-3.7-flash"
+                ),
+                "AGY model evidence setup failed"
             )
 
             var snapshot = try await UsageActivityIndexer.shared.scanAGY(
@@ -316,23 +349,37 @@ struct AIUsageProviderFixtureTests {
                 geminiDirectory: root,
                 databaseURL: databaseURL
             )
-            expect(todayTokens(snapshot) == 300, "AGY initial estimate is wrong")
+            expect(todayTokens(snapshot) == 460, "AGY recorded usage total is wrong")
+            let gemini = snapshot.modelActivity.first {
+                $0.period == .today && $0.modelID == "gemini-3.1-pro"
+            }
+            expect(gemini?.usage.inputTokens == 360, "AGY Gemini input/cache tokens are wrong")
+            expect(gemini?.usage.outputTokens == 100, "AGY Gemini output/reasoning tokens are wrong")
+            let waitingModel = snapshot.modelActivity.first {
+                $0.period == .today && $0.modelID == "gemini-3.7-flash"
+            }
+            expect(waitingModel != nil, "AGY model evidence disappeared without a timestamp")
+            expect(waitingModel?.usage.totalTokens == 0, "AGY model evidence invented Token usage")
+            expect(waitingModel?.turns == 0, "AGY model evidence invented a completed turn")
 
             snapshot = try await UsageActivityIndexer.shared.scanAGY(
                 providerID: "agy-fixture",
                 geminiDirectory: root,
                 databaseURL: databaseURL
             )
-            expect(todayTokens(snapshot) == 300, "unchanged AGY database duplicated rows")
+            expect(todayTokens(snapshot) == 460, "unchanged AGY database duplicated rows")
 
             expect(
-                sqlite3_exec(
+                insertAGYTurn(
                     database,
-                    "INSERT INTO steps VALUES(zeroblob(0), zeroblob(350));",
-                    nil,
-                    nil,
-                    nil
-                ) == SQLITE_OK,
+                    idx: 3,
+                    model: "gemini-3.1-pro",
+                    input: 50,
+                    cacheRead: 10,
+                    output: 20,
+                    reasoning: 5,
+                    timestamp: now
+                ),
                 "AGY fixture append failed"
             )
             snapshot = try await UsageActivityIndexer.shared.scanAGY(
@@ -340,7 +387,7 @@ struct AIUsageProviderFixtureTests {
                 geminiDirectory: root,
                 databaseURL: databaseURL
             )
-            expect(todayTokens(snapshot) == 400, "changed AGY database was not rebuilt")
+            expect(todayTokens(snapshot) == 545, "changed AGY database was not rebuilt")
         }
     }
 
@@ -359,14 +406,30 @@ struct AIUsageProviderFixtureTests {
                 sqlite3_exec(
                     database,
                     "PRAGMA journal_mode=WAL;"
-                        + "CREATE TABLE steps(metadata BLOB, step_payload BLOB);"
-                        + "INSERT INTO steps VALUES(zeroblob(0), zeroblob(350));"
-                        + "PRAGMA wal_checkpoint(TRUNCATE);",
+                        + "CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);",
                     nil,
                     nil,
                     nil
                 ) == SQLITE_OK,
                 "AGY WAL fixture setup failed"
+            )
+            expect(
+                insertAGYTurn(
+                    database,
+                    idx: 0,
+                    model: "gemini-3.1-pro",
+                    input: 60,
+                    cacheRead: 10,
+                    output: 20,
+                    reasoning: 10,
+                    timestamp: Int64(Date().timeIntervalSince1970)
+                ),
+                "AGY WAL turn setup failed"
+            )
+            expect(
+                sqlite3_exec(database, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
+                    == SQLITE_OK,
+                "AGY WAL checkpoint failed"
             )
             sqlite3_close_v2(database)
             for suffix in ["-wal", "-shm"] {
@@ -390,7 +453,7 @@ struct AIUsageProviderFixtureTests {
                 geminiDirectory: root,
                 databaseURL: databaseURL
             )
-            expect(todayTokens(snapshot) == 100, "AGY immutable WAL fallback lost rows")
+            expect(todayTokens(snapshot) == 100, "AGY immutable WAL fallback lost recorded usage")
             expect(!snapshot.catchUpPending, "AGY immutable WAL fallback stayed partial")
         }
     }
@@ -628,6 +691,114 @@ struct AIUsageProviderFixtureTests {
                 ]
             ]
         ])
+    }
+
+    private static func insertAGYTurn(
+        _ database: OpaquePointer?,
+        idx: Int,
+        model: String,
+        input: Int64,
+        cacheRead: Int64,
+        output: Int64,
+        reasoning: Int64,
+        timestamp: Int64
+    ) -> Bool {
+        let payload = agyRecordedUsagePayload(
+            idx: idx,
+            model: model,
+            input: input,
+            cacheRead: cacheRead,
+            output: output,
+            reasoning: reasoning,
+            timestamp: timestamp
+        )
+        let hex = payload.map { String(format: "%02x", $0) }.joined()
+        return sqlite3_exec(
+            database,
+            "INSERT INTO gen_metadata(idx, data) VALUES(\(idx), X'\(hex)');",
+            nil,
+            nil,
+            nil
+        ) == SQLITE_OK
+    }
+
+    private static func insertAGYModelEvidence(
+        _ database: OpaquePointer?,
+        idx: Int,
+        model: String
+    ) -> Bool {
+        var chat = Data()
+        chat.append(protoString(field: 19, value: model))
+        let payload = protoMessage(field: 1, payload: chat)
+        let hex = payload.map { String(format: "%02x", $0) }.joined()
+        return sqlite3_exec(
+            database,
+            "INSERT INTO gen_metadata(idx, data) VALUES(\(idx), X'\(hex)');",
+            nil,
+            nil,
+            nil
+        ) == SQLITE_OK
+    }
+
+    /// 生成与 AGY `gen_metadata.data` 相同字段布局的最小 protobuf fixture。
+    private static func agyRecordedUsagePayload(
+        idx: Int,
+        model: String,
+        input: Int64,
+        cacheRead: Int64,
+        output: Int64,
+        reasoning: Int64,
+        timestamp: Int64
+    ) -> Data {
+        var usage = Data()
+        usage.append(protoCounter(field: 2, value: input))
+        usage.append(protoCounter(field: 5, value: cacheRead))
+        usage.append(protoCounter(field: 9, value: output))
+        usage.append(protoCounter(field: 10, value: reasoning))
+        usage.append(protoString(field: 11, value: "response-\(idx)"))
+
+        var recordedAt = Data()
+        recordedAt.append(protoCounter(field: 1, value: timestamp))
+
+        var generation = Data()
+        generation.append(protoMessage(field: 4, payload: recordedAt))
+
+        var chat = Data()
+        chat.append(protoMessage(field: 4, payload: usage))
+        chat.append(protoMessage(field: 9, payload: generation))
+        chat.append(protoString(field: 19, value: model))
+        chat.append(protoString(field: 21, value: model))
+        return protoMessage(field: 1, payload: chat)
+    }
+
+    private static func protoCounter(field: Int, value: Int64) -> Data {
+        guard value >= 0 else { fatalError("protobuf fixture counter must be nonnegative") }
+        var result = protoVarint(UInt64(field << 3))
+        result.append(protoVarint(UInt64(value)))
+        return result
+    }
+
+    private static func protoString(field: Int, value: String) -> Data {
+        protoMessage(field: field, payload: Data(value.utf8))
+    }
+
+    private static func protoMessage(field: Int, payload: Data) -> Data {
+        var result = protoVarint(UInt64((field << 3) | 2))
+        result.append(protoVarint(UInt64(payload.count)))
+        result.append(payload)
+        return result
+    }
+
+    private static func protoVarint(_ value: UInt64) -> Data {
+        var value = value
+        var bytes: [UInt8] = []
+        repeat {
+            var byte = UInt8(value & 0x7F)
+            value >>= 7
+            if value != 0 { byte |= 0x80 }
+            bytes.append(byte)
+        } while value != 0
+        return Data(bytes)
     }
 
     private static func appendLine(_ line: String, to file: URL) throws {

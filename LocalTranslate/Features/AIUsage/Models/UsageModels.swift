@@ -26,6 +26,7 @@ nonisolated enum ActivityPeriod: String, CaseIterable, Codable, Sendable, Identi
     case today = "Today"
     case sevenDays = "7 Days"
     case thirtyDays = "30 Days"
+    case ninetyDays = "90 Days"
     case lifetime = "Lifetime"
 
     var id: String { rawValue }
@@ -122,6 +123,8 @@ nonisolated struct ModelActivity: Identifiable, Codable, Sendable {
 }
 
 nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {
+    static let currentSchemaVersion = 6
+
     let id: String
     let sortOrder: Int
     let provider: ProviderKind

@@ -51,7 +51,7 @@ struct ClaudeProvider: UsageProvider {
             sourceLabel: "Claude Code 本机会话 + CLI 额度缓存",
             confidence: quota.windows.isEmpty ? .medium : .high,
             statusMessage: messages.isEmpty ? nil : messages.joined(separator: "；") + "。",
-            schemaVersion: 4,
+            schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
             activityAvailable: true
         )
@@ -74,7 +74,7 @@ struct ClaudeProvider: UsageProvider {
             sourceLabel: "Claude Code 本机状态",
             confidence: .low,
             statusMessage: status,
-            schemaVersion: 4,
+            schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
             activityAvailable: true
         )

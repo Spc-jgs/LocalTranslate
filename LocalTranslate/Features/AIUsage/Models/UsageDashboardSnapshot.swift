@@ -118,7 +118,16 @@ nonisolated struct UsageDashboardSnapshot {
         providerRows = rows
 
         todayModels = Self.makeModelRows(accounts: accounts, period: .today)
-        models = Self.makeModelRows(accounts: accounts, period: .thirtyDays)
+        let modelPeriod: ActivityPeriod
+        switch range {
+        case .sevenDays:
+            modelPeriod = .sevenDays
+        case .thirtyDays:
+            modelPeriod = .thirtyDays
+        case .ninetyDays:
+            modelPeriod = .ninetyDays
+        }
+        models = Self.makeModelRows(accounts: accounts, period: modelPeriod)
 
         var todayBreakdown = TokenBreakdown()
         for row in todayModels {
