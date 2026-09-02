@@ -10,7 +10,9 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
     private init() {
         let size = NSSize(
             width: LiveSubtitlesOverlayLayout.width(for: nil),
-            height: LiveSubtitlesOverlayLayout.compactHeight
+            height: LiveSubtitlesOverlayLayout.compactHeight(
+                fontSize: AppSettings.liveFontSize
+            )
         )
 
         let hostingView = NSHostingView(
@@ -64,16 +66,29 @@ public final class LiveSubtitlesOverlayPanel: NSPanel {
         false
     }
 
-    public func setHistoryExpanded(_ expanded: Bool) {
+    /// 应用当前的内容高度。
+    ///
+    /// 折叠态高度跟着字号走：两行译文加一行原文在 34pt 下需要约 150pt，
+    /// 而此前是写死的 124pt，长句会被裁掉。
+    public func applyContentHeight(
+        historyExpanded: Bool,
+        fontSize: CGFloat
+    ) {
         let previousFrame = frame
+        let height = LiveSubtitlesOverlayLayout.height(
+            historyExpanded: historyExpanded,
+            fontSize: fontSize
+        )
+
+        guard abs(previousFrame.height - height) >= 1 else { return }
+
         setContentSize(
             NSSize(
                 width: previousFrame.width,
-                height: LiveSubtitlesOverlayLayout.height(
-                    historyExpanded: expanded
-                )
+                height: height
             )
         )
+        // 保持底边不动：字幕条贴着屏幕下方，向上生长才不会越出屏幕。
         setFrameOrigin(
             NSPoint(
                 x: previousFrame.midX - frame.width / 2,

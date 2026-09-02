@@ -455,6 +455,11 @@ final class AppDelegate:
             vm.stop()
             overlay.orderOut(nil)
         } else {
+            // 字号可能在设置页改过，而那时字幕条没显示、收不到 onChange。
+            overlay.applyContentHeight(
+                historyExpanded: vm.showHistoryDrawer,
+                fontSize: vm.fontSize
+            )
             overlay.positionAtScreenBottom()
             overlay.makeKeyAndOrderFront(nil)
             overlay.orderFrontRegardless()

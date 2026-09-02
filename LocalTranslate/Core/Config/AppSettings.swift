@@ -82,6 +82,17 @@ nonisolated enum AppSettings {
     // MARK: - Live Subtitles
 
     static let defaultLiveFontSize: CGFloat = 26
+
+    static var liveFontSize: CGFloat {
+        let stored = CGFloat(
+            UserDefaults.standard.double(
+                forKey: Key.liveFontSize
+            )
+        )
+        return liveFontSizeRange.contains(stored)
+            ? stored
+            : defaultLiveFontSize
+    }
     static let liveFontSizeRange: ClosedRange<CGFloat> = 16...34
     static let liveFontSizeStep: CGFloat = 2
 }

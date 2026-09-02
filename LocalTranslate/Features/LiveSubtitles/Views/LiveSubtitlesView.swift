@@ -91,9 +91,20 @@ public struct LiveSubtitlesView: View {
         .onHover { hovering in
             isHovering = hovering
         }
-        .onChange(of: viewModel.showHistoryDrawer) { _, isExpanded in
-            LiveSubtitlesOverlayPanel.shared.setHistoryExpanded(isExpanded)
+        .onChange(of: viewModel.showHistoryDrawer) { _, _ in
+            applyPanelHeight()
         }
+        // 字号变了高度也要跟着变，否则大字号下长句会被裁掉。
+        .onChange(of: viewModel.fontSize) { _, _ in
+            applyPanelHeight()
+        }
+    }
+
+    private func applyPanelHeight() {
+        LiveSubtitlesOverlayPanel.shared.applyContentHeight(
+            historyExpanded: viewModel.showHistoryDrawer,
+            fontSize: viewModel.fontSize
+        )
     }
 
     // MARK: - Top Control Bar (Apple 原生控件)

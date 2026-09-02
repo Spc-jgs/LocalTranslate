@@ -45,6 +45,13 @@ run_suite "LiveSubtitlePipelineStateTests" \
   LocalTranslate/Features/LiveSubtitles/Models/LiveSubtitlePipelineModels.swift \
   Tests/LiveSubtitlePipelineStateTests.swift
 
+run_suite "LiveSubtitlesLayoutTests" \
+  LocalTranslate/Core/Config/AppSettings.swift \
+  LocalTranslate/Features/Translate/Models/TranslationLanguage.swift \
+  LocalTranslate/Features/Translate/Models/TranslationStyle.swift \
+  LocalTranslate/Features/LiveSubtitles/Views/LiveSubtitlesOverlayLayout.swift \
+  Tests/LiveSubtitlesLayoutTests.swift
+
 run_suite "TranslationLanguageTests" \
   LocalTranslate/Features/Translate/Models/TranslationLanguage.swift \
   Tests/TranslationLanguageTests.swift
