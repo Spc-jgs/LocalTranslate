@@ -160,9 +160,6 @@ final class AppDelegate:
     private let miniHUDViewModel =
         MiniHUDViewModel()
 
-    private var lastPanelHeight:
-        CGFloat = TranslatePanelLayout.baseHeight
-
     // MARK: - Launch
 
     func applicationDidFinishLaunching(
@@ -216,9 +213,6 @@ final class AppDelegate:
 
         self.miniHUDPanel =
             miniHUD
-
-        lastPanelHeight =
-            TranslatePanelLayout.baseHeight
 
         observeContentSize()
         observeMiniHUDContentSize()
@@ -610,19 +604,21 @@ final class AppDelegate:
             )
     }
 
+    /// 气泡高度只由内容决定，因此不订阅 `isTranslating`。
+    ///
+    /// 主面板还需要它来决定 `keepGrowingOnly`；气泡的 `updateHeight` 没有这个
+    /// 参数，订阅它只会在翻译结束时多算一次同样的高度。
     private func observeMiniHUDContentSize() {
         Publishers
-            .CombineLatest3(
+            .CombineLatest(
                 miniHUDViewModel.$originalText,
-                miniHUDViewModel.$translatedText,
-                miniHUDViewModel.$isTranslating
+                miniHUDViewModel.$translatedText
             )
             .receive(on: RunLoop.main)
-            .sink { [weak self] original, translated, loading in
+            .sink { [weak self] original, translated in
                 self?.updateMiniHUDSize(
                     original: original,
-                    translated: translated,
-                    loading: loading
+                    translated: translated
                 )
             }
             .store(in: &cancellables)
@@ -630,8 +626,7 @@ final class AppDelegate:
 
     private func updateMiniHUDSize(
         original: String,
-        translated: String,
-        loading: Bool
+        translated: String
     ) {
         guard let miniHUDPanel, miniHUDPanel.isVisible else {
             return
