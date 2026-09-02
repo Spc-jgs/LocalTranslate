@@ -19,8 +19,7 @@ struct MiniHUDView: View {
 
     private var translationHeight: CGFloat {
         MiniHUDLayout.translationHeight(
-            for: viewModel.translatedText,
-            isTranslating: viewModel.isTranslating
+            for: viewModel.translatedText
         )
     }
 

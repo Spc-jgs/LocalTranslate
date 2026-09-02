@@ -50,18 +50,23 @@ enum TranslatePanelLayout {
     static let translationLineSpacing: CGFloat = 4
     static let translationMinimumHeight: CGFloat = 75
     static let translationMaximumHeight: CGFloat = 230
-    /// 尚未产出任何 token 时的占位高度，避免首帧从 0 跳到正文高度。
-    static let translationPendingHeight: CGFloat = 90
 
+    /// 译文区高度。
+    ///
+    /// 刻意与 `isTranslating` 无关：任何只在翻译途中出现的额外高度，都会在
+    /// 翻译结束时缩回去，表现为窗口抖一下。此前这里有两处这样的高度——
+    /// 「已发起但无 token」的 90pt 占位，以及流式期间为「正在生成…」预留的
+    /// 22pt。前者比常见译文的最终高度（下限 75pt）还高，于是选中一个单词
+    /// 就能看到窗口先长后缩。
+    ///
+    /// 现在等待与流式阶段都停在下限，「正在生成…」挤在既有空间里，
+    /// 译文区本身可滚动，不会因此截断。
     static func translationHeight(
-        for text: String,
-        isTranslating: Bool
+        for text: String
     ) -> CGFloat {
 
-        if text.isEmpty {
-            return isTranslating
-                ? translationPendingHeight
-                : translationMinimumHeight
+        guard !text.isEmpty else {
+            return translationMinimumHeight
         }
 
         let measured = TextHeightMeasurer.height(
@@ -72,12 +77,9 @@ enum TranslatePanelLayout {
             lineSpacing: translationLineSpacing
         )
 
-        // 正文下方在流式期间还要放一行「正在生成…」。
-        let footnote: CGFloat = isTranslating ? 22 : 0
-
         return min(
             max(
-                measured + 20 + footnote,
+                measured + 20,
                 translationMinimumHeight
             ),
             translationMaximumHeight
@@ -89,20 +91,14 @@ enum TranslatePanelLayout {
     /// 窗口高度 = 基础高度 + 内容相对空态的增量。
     static func panelHeight(
         original: String,
-        translated: String,
-        isTranslating: Bool
+        translated: String
     ) -> CGFloat {
 
         let inputDelta = inputHeight(for: original)
             - inputHeight(for: "")
 
-        let translationDelta = translationHeight(
-            for: translated,
-            isTranslating: isTranslating
-        ) - translationHeight(
-            for: "",
-            isTranslating: false
-        )
+        let translationDelta = translationHeight(for: translated)
+            - translationHeight(for: "")
 
         return baseHeight + inputDelta + translationDelta
     }
@@ -174,7 +170,8 @@ enum MiniHUDLayout {
     static let translationFontSize: CGFloat = 14
     static let translationFontWeight: NSFont.Weight = .medium
     static let translationLineSpacing: CGFloat = 4
-    static let translationMinimumHeight: CGFloat = 36
+    /// 与空态占位同高。低于它，从「正在翻译…」切到首个 token 时气泡会缩一下。
+    static let translationMinimumHeight: CGFloat = 46
     static let translationMaximumHeight: CGFloat = 340
 
     static func originalHeight(for text: String) -> CGFloat {
@@ -198,9 +195,9 @@ enum MiniHUDLayout {
         ) + originalVerticalPadding
     }
 
+    /// 与主面板同理：不为「生成中…」预留高度，否则完成时会缩回去。
     static func translationHeight(
-        for text: String,
-        isTranslating: Bool
+        for text: String
     ) -> CGFloat {
 
         guard !text.isEmpty else {
@@ -215,11 +212,9 @@ enum MiniHUDLayout {
             lineSpacing: translationLineSpacing
         )
 
-        let footnote: CGFloat = isTranslating ? 18 : 0
-
         return min(
             max(
-                measured + 12 + footnote,
+                measured + 12,
                 translationMinimumHeight
             ),
             translationMaximumHeight
@@ -228,17 +223,14 @@ enum MiniHUDLayout {
 
     static func panelHeight(
         original: String,
-        translated: String,
-        isTranslating: Bool
+        translated: String
     ) -> CGFloat {
 
-        // 还没有译文时正文区是「正在翻译…」或「等待输入…」占位。
+        // 空态是「正在翻译…」或「等待输入…」占位，与译文区下限同高，
+        // 因此从空态切到首个 token 时高度不变。
         let bodyHeight = translated.isEmpty
-            ? 46
-            : translationHeight(
-                for: translated,
-                isTranslating: isTranslating
-            )
+            ? translationMinimumHeight
+            : translationHeight(for: translated)
 
         let total = chromeHeight
             + originalHeight(for: original)

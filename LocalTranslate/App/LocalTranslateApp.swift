@@ -640,8 +640,7 @@ final class AppDelegate:
         miniHUDPanel.updateHeight(
             MiniHUDLayout.panelHeight(
                 original: original,
-                translated: translated,
-                isTranslating: loading
+                translated: translated
             ),
             animated: false
         )
@@ -657,8 +656,7 @@ final class AppDelegate:
             height:
                 TranslatePanelLayout.panelHeight(
                     original: original,
-                    translated: translated,
-                    isTranslating: loading
+                    translated: translated
                 ),
             keepGrowingOnly: loading
         )

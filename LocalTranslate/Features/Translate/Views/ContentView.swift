@@ -52,8 +52,7 @@ struct ContentView: View {
 
     private var translationHeight: CGFloat {
         TranslatePanelLayout.translationHeight(
-            for: viewModel.translatedText,
-            isTranslating: viewModel.isTranslating
+            for: viewModel.translatedText
         )
     }
 
