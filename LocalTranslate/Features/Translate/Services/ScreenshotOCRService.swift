@@ -69,7 +69,12 @@ final class ScreenshotOCRService {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
-            request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US", "ja-JP", "ko-KR"]
+            // 与翻译支持的源语言对齐：OCR 认不出的语言，翻译也就无从谈起。
+            request.recognitionLanguages = [
+                "zh-Hans", "zh-Hant", "en-US",
+                "ja-JP", "ko-KR",
+                "fr-FR", "de-DE", "es-ES", "ru-RU"
+            ]
 
             if #available(macOS 13.0, *) {
                 request.automaticallyDetectsLanguage = true

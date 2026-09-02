@@ -82,6 +82,9 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.customPrompt)
     private var customPrompt = AppSettings.defaultCustomPrompt
 
+    @AppStorage(AppSettings.Key.targetLanguage)
+    private var targetLanguageRaw = AppSettings.defaultTargetLanguage.rawValue
+
     @State
     private var installedModels: [OllamaInstalledModel] = []
 
@@ -183,6 +186,8 @@ struct SettingsView: View {
                 connectionSection
 
                 modelSection
+
+                targetLanguageSection
 
                 translationSection
 
@@ -756,6 +761,56 @@ struct SettingsView: View {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private var selectedTargetLanguage: TranslationLanguage {
+        TranslationLanguage(rawValue: targetLanguageRaw)
+            ?? AppSettings.defaultTargetLanguage
+    }
+
+    // MARK: - Target Language
+
+    private var targetLanguageSection: some View {
+
+        settingsSection(
+            title: "翻译语言",
+            systemImage: "character.bubble"
+        ) {
+
+            VStack(spacing: 11) {
+
+                settingsRow(
+                    title: "目标语言"
+                ) {
+
+                    Picker(
+                        "",
+                        selection: $targetLanguageRaw
+                    ) {
+                        ForEach(TranslationLanguage.allCases) { language in
+                            Text(language.displayName)
+                                .tag(language.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 170)
+                }
+
+                Text(
+                    "源语言由原文自动识别，无需选择。原文本身已经是"
+                        + "\(selectedTargetLanguage.displayName)时，"
+                        + "会翻译为\(selectedTargetLanguage.counterpart.displayName)。"
+                )
+                .font(
+                    .system(size: 10)
+                )
+                .foregroundStyle(.tertiary)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
             }
         }
     }

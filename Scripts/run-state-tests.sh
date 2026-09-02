@@ -45,6 +45,10 @@ run_suite "LiveSubtitlePipelineStateTests" \
   LocalTranslate/Features/LiveSubtitles/Models/LiveSubtitlePipelineModels.swift \
   Tests/LiveSubtitlePipelineStateTests.swift
 
+run_suite "TranslationLanguageTests" \
+  LocalTranslate/Features/Translate/Models/TranslationLanguage.swift \
+  Tests/TranslationLanguageTests.swift
+
 run_suite "AIUsageIndexTests" \
   LocalTranslate/Features/AIUsage/Models/UsageModels.swift \
   LocalTranslate/Features/AIUsage/Services/UsageIndex.swift \
@@ -53,6 +57,7 @@ run_suite "AIUsageIndexTests" \
 
 run_suite "AIUsageProviderFixtureTests" \
   LocalTranslate/Core/Config/AppSettings.swift \
+  LocalTranslate/Features/Translate/Models/TranslationLanguage.swift \
   LocalTranslate/Core/System/ShellResolver.swift \
   LocalTranslate/Features/Translate/Models/TranslationStyle.swift \
   LocalTranslate/Features/AIUsage/Models/UsageModels.swift \

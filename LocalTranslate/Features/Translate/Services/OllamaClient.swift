@@ -198,52 +198,52 @@ private struct OllamaRunningModel:
 
 // MARK: - Translation Direction
 
-private enum TranslationDirection {
+/// 一次翻译的语言对。
+///
+/// 此前这里是个二元枚举，只有「中→英」和「英→中」两支，其余语言全部落到
+/// `default` 再回退成「英→中」——选中一段日文，Prompt 会明确告诉模型
+/// 「输入是英文」。现在源语言按实际识别结果写入，目标语言由用户配置。
+nonisolated struct TranslationDirection {
 
-    case chineseToEnglish
-    case englishToChinese
+    /// 识别出的源语言名；`nil` 表示没认出来。
+    let sourceName: String?
+    let targetName: String
 
     var instruction: String {
 
-        switch self {
-
-        case .chineseToEnglish:
+        guard let sourceName else {
 
             return """
-            当前翻译方向固定为：
+            当前翻译目标语言固定为：
 
-            简体中文 → 英文
+            \(targetName)
 
-            必须把输入中的中文自然语言翻译成自然、地道的英文。
+            必须把输入的自然语言内容翻译成自然、地道的\(targetName)，
+            无论输入是哪种语言。
 
-            即使输入非常短，例如：
-            “这样快吗”
-            “真的吗”
-            “为什么”
-            “可以吗”
+            即使输入非常短，也必须完成翻译。
 
-            也必须输出对应的英文。
-
-            不得把中文改写成另一种中文表达。
-            不得进行中文润色。
-            不得保持中文原样，除非内容属于代码、标识符或明确不应该翻译的技术内容。
-            """
-
-        case .englishToChinese:
-
-            return """
-            当前翻译方向固定为：
-
-            英文 → 简体中文
-
-            必须把输入中的英文自然语言翻译成自然、符合中文母语者习惯的简体中文。
-
-            即使输入非常短，也必须完成英文到中文的翻译。
-
-            不得仅仅改写英文。
-            不得保持英文自然语言原样，除非内容属于代码、标识符、专有名称或明确不应该翻译的技术内容。
+            不得只做润色或改写。
+            不得保持原文语言不变，除非内容属于代码、标识符、专有名称
+            或明确不应该翻译的技术内容。
             """
         }
+
+        return """
+        当前翻译方向固定为：
+
+        \(sourceName) → \(targetName)
+
+        必须把输入中的\(sourceName)自然语言翻译成自然、
+        符合\(targetName)母语者习惯的表达。
+
+        即使输入非常短，例如只有两三个词或一个短句，也必须输出对应的\(targetName)。
+
+        不得把输入改写成另一种\(sourceName)表达。
+        不得只做\(sourceName)润色。
+        不得保持\(sourceName)原样，除非内容属于代码、标识符、专有名称
+        或明确不应该翻译的技术内容。
+        """
     }
 }
 
@@ -314,7 +314,7 @@ final class OllamaClient {
             )
 
         let direction =
-            detectDirection(
+            resolveDirection(
                 text
             )
 
@@ -1065,9 +1065,16 @@ final class OllamaClient {
 
     // MARK: - Language Detection
 
-    private func detectDirection(
+    /// 解析本次翻译的语言对。
+    ///
+    /// 原文已经是目标语言时翻到 `counterpart`：选中文的人选中一段中文，
+    /// 要的是英文，而不是把中文再润色一遍。
+    private func resolveDirection(
         _ text: String
     ) -> TranslationDirection {
+
+        let target =
+            AppSettings.targetLanguage
 
         let cleanedText =
             text
@@ -1076,49 +1083,77 @@ final class OllamaClient {
                         .whitespacesAndNewlines
                 )
 
+        guard
+            let detected =
+                detectLanguage(
+                    cleanedText
+                )
+        else {
+
+            // 认不出来就不假装知道，只固定目标语言。
+            return TranslationDirection(
+                sourceName: nil,
+                targetName:
+                    target.displayName
+            )
+        }
+
+        if TranslationLanguage
+            .matching(detected) == target {
+
+            let counterpart =
+                target.counterpart
+
+            return TranslationDirection(
+                sourceName:
+                    target.displayName,
+                targetName:
+                    counterpart.displayName
+            )
+        }
+
+        return TranslationDirection(
+            sourceName:
+                TranslationLanguage
+                    .sourceName(
+                        for: detected
+                    ),
+            targetName:
+                target.displayName
+        )
+    }
+
+    private func detectLanguage(
+        _ text: String
+    ) -> NLLanguage? {
+
+        guard !text.isEmpty else {
+            return nil
+        }
+
         let recognizer =
             NLLanguageRecognizer()
 
         recognizer.processString(
-            cleanedText
+            text
         )
 
-        if
-            let language =
-                recognizer
-                    .dominantLanguage {
+        if let dominant =
+            recognizer.dominantLanguage,
+           dominant != .undetermined {
 
-            switch language {
-
-            case
-                .simplifiedChinese,
-                .traditionalChinese:
-
-                return
-                    .chineseToEnglish
-
-            case .english:
-
-                return
-                    .englishToChinese
-
-            default:
-
-                break
-            }
+            return dominant
         }
 
-        if
-            containsMeaningfulChinese(
-                cleanedText
-            ) {
+        // 短句常识别不出来，而中日韩可以按字形兜底。
+        if containsMeaningfulChinese(
+            text
+        ) {
 
-            return
-                .chineseToEnglish
+            return .simplifiedChinese
         }
 
-        return
-            .englishToChinese
+        return nil
     }
 
     private func
@@ -1136,25 +1171,9 @@ final class OllamaClient {
                         scalar.value
 
                     return
-                        (
-                            value
-                            >=
-                            0x4E00
-                            &&
-                            value
-                            <=
-                            0x9FFF
-                        )
+                        (value >= 0x4E00 && value <= 0x9FFF)
                         ||
-                        (
-                            value
-                            >=
-                            0x3400
-                            &&
-                            value
-                            <=
-                            0x4DBF
-                        )
+                        (value >= 0x3400 && value <= 0x4DBF)
                 }
                 .count
 
@@ -1163,32 +1182,21 @@ final class OllamaClient {
                 .filter {
                     character in
 
-                    !character
-                        .isWhitespace
+                    !character.isWhitespace
                     &&
-                    !character
-                        .isPunctuation
+                    !character.isPunctuation
                 }
                 .count
 
-        guard
-            meaningfulCount > 0
-        else {
-
+        guard meaningfulCount > 0 else {
             return false
         }
 
-        let ratio =
-            Double(
-                chineseCount
-            )
-            /
-            Double(
-                meaningfulCount
-            )
-
         return
-            ratio >= 0.15
+            Double(chineseCount)
+            /
+            Double(meaningfulCount)
+            >= 0.15
     }
 
     // MARK: - URL

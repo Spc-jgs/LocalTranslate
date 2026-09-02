@@ -14,6 +14,7 @@ nonisolated enum AppSettings {
         static let keepAlive = "ollamaKeepAlive"
         static let translationStyle = "translationStyle"
         static let customPrompt = "customTranslationPrompt"
+        static let targetLanguage = "translationTargetLanguage"
 
         // MARK: Live Subtitles
 
@@ -33,6 +34,7 @@ nonisolated enum AppSettings {
     static let defaultKeepAlive = "10m"
     static let defaultTranslationStyleRaw = TranslationStyle.standard.rawValue
     static let defaultCustomPrompt = ""
+    static let defaultTargetLanguage = TranslationLanguage.simplifiedChinese
 
     static var model: String {
         UserDefaults.standard.string(
@@ -65,6 +67,16 @@ nonisolated enum AppSettings {
         UserDefaults.standard.string(
             forKey: Key.customPrompt
         ) ?? defaultCustomPrompt
+    }
+
+    /// 翻译目标语言。原文已经是它时翻到 `counterpart`。
+    static var targetLanguage: TranslationLanguage {
+        guard let raw = UserDefaults.standard.string(
+            forKey: Key.targetLanguage
+        ), let language = TranslationLanguage(rawValue: raw) else {
+            return defaultTargetLanguage
+        }
+        return language
     }
 
     // MARK: - Live Subtitles
