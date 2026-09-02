@@ -157,37 +157,61 @@ struct AIUsageView: View {
                     subtitle: "每个账号的限额窗口、剩余额度与重置时间"
                 )
 
-                // LazyVGrid 会把同一行的卡片拉到最高那张的高度：AGY 有 4 个额度
-                // 窗口、Claude 可能一个都没有，同行时矮的那张下方就是一大片空白。
-                // 两列各自独立堆叠即可，卡片保持自身高度。
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(
-                        Array(quotaColumns.enumerated()),
-                        id: \.offset
-                    ) { _, column in
-                        VStack(spacing: 12) {
-                            ForEach(column) { account in
-                                QuotaAccountCard(
-                                    account: account,
-                                    isRefreshing: store.isRefreshing(
-                                        providerID: account.id
-                                    ),
-                                    onRefresh: {
-                                        Task {
-                                            await store.refresh(
-                                                providerID: account.id
-                                            )
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                    }
+                // 宽度够就并排两列，不够退回单列。固定两列会在最小窗口宽度下
+                // 把卡片压到 300pt 以下，长邮箱与套餐名随即被截断。
+                ViewThatFits(in: .horizontal) {
+                    quotaMasonryLayout
+                    quotaSingleColumnLayout
                 }
             }
         }
     }
+
+    /// 两列各自独立堆叠：LazyVGrid 会把同一行的卡片拉到最高那张的高度，
+    /// AGY 有 4 个额度窗口而 Claude 可能一个都没有，同行时矮的那张下方
+    /// 就是一大片空白。
+    private var quotaMasonryLayout: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ForEach(
+                Array(quotaColumns.enumerated()),
+                id: \.offset
+            ) { _, column in
+                VStack(spacing: 12) {
+                    ForEach(column) { account in
+                        quotaCard(for: account)
+                    }
+                }
+                .frame(
+                    minWidth: Self.minimumQuotaCardWidth,
+                    maxWidth: .infinity,
+                    alignment: .top
+                )
+            }
+        }
+    }
+
+    private var quotaSingleColumnLayout: some View {
+        VStack(spacing: 12) {
+            ForEach(subscriptionAccounts) { account in
+                quotaCard(for: account)
+            }
+        }
+    }
+
+    private func quotaCard(for account: AccountSnapshot) -> some View {
+        QuotaAccountCard(
+            account: account,
+            isRefreshing: store.isRefreshing(providerID: account.id),
+            onRefresh: {
+                Task {
+                    await store.refresh(providerID: account.id)
+                }
+            }
+        )
+    }
+
+    /// 低于这个宽度时账号名、邮箱与套餐名会开始截断。
+    private static let minimumQuotaCardWidth: CGFloat = 300
 
     /// 把订阅卡片分到两列，尽量让两列高度接近。
     ///
