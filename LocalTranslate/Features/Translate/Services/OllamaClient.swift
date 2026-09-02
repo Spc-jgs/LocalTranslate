@@ -5,10 +5,21 @@ import NaturalLanguage
 
 struct OllamaChatRequest: Encodable {
 
+    /// 采样参数。
+    ///
+    /// 翻译是确定性任务：同一段原文两次翻译应当得到同一结果。模型自带的
+    /// Modelfile 往往为对话调参（`qwen3.5:4b` 写的是 `temperature 1`），
+    /// 不覆盖就会继承过来。实测同一段技术文本连翻三次会得到三种译文，
+    /// 其中出现英文残留、擅自加括号解释、markdown 标记泄漏。
+    struct Options: Encodable {
+        let temperature: Double
+    }
+
     let model: String
     let messages: [OllamaMessage]
     let stream: Bool
     let think: Bool
+    let options: Options
     let keepAlive: String
 
     enum CodingKeys:
@@ -19,6 +30,7 @@ struct OllamaChatRequest: Encodable {
         case messages
         case stream
         case think
+        case options
 
         case keepAlive =
             "keep_alive"
@@ -340,6 +352,11 @@ final class OllamaClient {
                 stream: true,
 
                 think: false,
+
+                options:
+                    .init(
+                        temperature: 0
+                    ),
 
                 keepAlive:
                     AppSettings.keepAlive
