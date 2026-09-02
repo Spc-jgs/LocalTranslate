@@ -142,6 +142,9 @@ final class AppDelegate:
     private var panel:
         FloatingPanel?
 
+    private var panelPresenter:
+        PanelPresenter?
+
     private var miniHUDPanel:
         MiniHUDPanel?
 
@@ -188,6 +191,13 @@ final class AppDelegate:
 
         self.panel =
             panel
+
+        self.panelPresenter =
+            PanelPresenter(
+                panel: panel,
+                baseHeight:
+                    TranslatePanelLayout.baseHeight
+            )
 
         let miniHUD =
             MiniHUDPanel(
@@ -327,7 +337,7 @@ final class AppDelegate:
                 clearExisting: false
             )
 
-        showPanelCentered(
+        panelPresenter?.showCentered(
             activateApp: true
         )
 
@@ -362,7 +372,7 @@ final class AppDelegate:
                     selectedText
                 )
 
-            showPanel(
+            panelPresenter?.show(
                 reposition:
                     !viewModel.isPinned,
                 activateApp:
@@ -379,7 +389,7 @@ final class AppDelegate:
                 clearExisting: false
             )
 
-        showPanel(
+        panelPresenter?.show(
             reposition:
                 !viewModel.isPinned,
             activateApp:
@@ -414,7 +424,7 @@ final class AppDelegate:
                 }
 
                 self.viewModel.loadSelectedText(recognizedText)
-                self.showPanel(
+                self.panelPresenter?.show(
                     reposition: !self.viewModel.isPinned,
                     activateApp: true
                 )
@@ -511,309 +521,13 @@ final class AppDelegate:
             viewModel.translatedText = currentTranslated
         }
 
-        showPanel(reposition: !viewModel.isPinned, activateApp: true)
+        panelPresenter?.show(
+            reposition: !viewModel.isPinned,
+            activateApp: true
+        )
         if currentTranslated.isEmpty {
             viewModel.translate()
         }
-    }
-
-    // MARK: - Normal Panel Show
-
-    private func showPanel(
-        reposition: Bool,
-        activateApp: Bool
-    ) {
-
-        guard let panel else {
-            return
-        }
-
-        // 每次显示前先保证窗口尺寸
-        // 没有超过当前屏幕。
-        constrainPanelToVisibleScreen(
-            panel
-        )
-
-        if
-            reposition
-            ||
-            !panel.isVisible {
-
-            positionPanelNearMouse(
-                panel
-            )
-        }
-
-        if activateApp {
-
-            NSApp.activate(
-                ignoringOtherApps: true
-            )
-        }
-
-        panel.markDisplayed()
-        panel.makeKeyAndOrderFront(
-            nil
-        )
-        panel.orderFrontRegardless()
-    }
-
-    // MARK: - Centered Show
-
-    private func showPanelCentered(
-        activateApp: Bool
-    ) {
-
-        guard let panel else {
-            return
-        }
-
-        constrainPanelToVisibleScreen(
-            panel
-        )
-
-        centerPanelOnCurrentScreen(
-            panel
-        )
-
-        if activateApp {
-
-            NSApp.activate(
-                ignoringOtherApps: true
-            )
-        }
-
-        panel.markDisplayed()
-        panel.makeKeyAndOrderFront(
-            nil
-        )
-        panel.orderFrontRegardless()
-    }
-
-    private func centerPanelOnCurrentScreen(
-        _ panel: NSPanel
-    ) {
-
-        guard let screen =
-            currentScreen()
-        else {
-
-            panel.center()
-
-            return
-        }
-
-        let visibleFrame =
-            screen.visibleFrame
-
-        let panelSize =
-            panel.frame.size
-
-        let x =
-            visibleFrame.midX
-            - panelSize.width / 2
-
-        let y =
-            visibleFrame.midY
-            - panelSize.height / 2
-
-        panel.setFrameOrigin(
-            NSPoint(
-                x: x,
-                y: y
-            )
-        )
-    }
-
-    // MARK: - Near Mouse
-
-    private func
-    positionPanelNearMouse(
-        _ panel: NSPanel
-    ) {
-
-        let mouseLocation =
-            NSEvent.mouseLocation
-
-        guard let screen =
-            currentScreen()
-        else {
-
-            panel.center()
-
-            return
-        }
-
-        let visibleFrame =
-            screen.visibleFrame
-
-        let panelSize =
-            panel.frame.size
-
-        let gap:
-            CGFloat = 18
-
-        let margin:
-            CGFloat = 16
-
-        var x =
-            mouseLocation.x
-            + gap
-
-        var y =
-            mouseLocation.y
-            - panelSize.height
-            - gap
-
-        // 右侧不够
-        // → 放鼠标左边。
-        if
-            x + panelSize.width
-            >
-            visibleFrame.maxX
-            - margin {
-
-            x =
-                mouseLocation.x
-                - panelSize.width
-                - gap
-        }
-
-        // 左侧保护。
-        if
-            x
-            <
-            visibleFrame.minX
-            + margin {
-
-            x =
-                visibleFrame.minX
-                + margin
-        }
-
-        // 下方不够
-        // → 放鼠标上方。
-        if
-            y
-            <
-            visibleFrame.minY
-            + margin {
-
-            y =
-                mouseLocation.y
-                + gap
-        }
-
-        // 最终 Y 坐标强制限制在屏幕内部。
-        y =
-            min(
-                max(
-                    y,
-                    visibleFrame.minY
-                    + margin
-                ),
-                visibleFrame.maxY
-                - panelSize.height
-                - margin
-            )
-
-        panel.setFrameOrigin(
-            NSPoint(
-                x: x,
-                y: y
-            )
-        )
-    }
-
-    // MARK: - Current Screen
-
-    private func currentScreen()
-        -> NSScreen? {
-
-        let mouseLocation =
-            NSEvent.mouseLocation
-
-        return
-            NSScreen.screens.first {
-
-                NSMouseInRect(
-                    mouseLocation,
-                    $0.frame,
-                    false
-                )
-
-            }
-            ??
-            panel?.screen
-            ??
-            NSScreen.main
-    }
-
-    // MARK: - Screen-Aware Max Height
-
-    private func maximumPanelHeight(
-        on screen: NSScreen?
-    ) -> CGFloat {
-
-        guard let screen else {
-
-            return 500
-        }
-
-        let visibleHeight =
-            screen.visibleFrame.height
-
-        // 浮窗不应该像普通 App 一样
-        // 把整个屏幕纵向占满。
-        //
-        // 小屏：
-        // 最多占可用区域约 78%。
-        //
-        // 大屏：
-        // 仍然限制在 520pt。
-        let proportionalMaximum =
-            visibleHeight * 0.78
-
-        return min(
-            520,
-            proportionalMaximum
-        )
-    }
-
-    // MARK: - Hard Screen Constraint
-
-    private func
-    constrainPanelToVisibleScreen(
-        _ panel: NSPanel
-    ) {
-
-        let screen =
-            panel.screen
-            ??
-            currentScreen()
-
-        guard let screen else {
-            return
-        }
-
-        let maxHeight =
-            maximumPanelHeight(
-                on: screen
-            )
-
-        guard
-            panel.frame.height
-            >
-            maxHeight
-        else {
-            return
-        }
-
-        resizePanel(
-            panel,
-            toHeight:
-                maxHeight
-        )
     }
 
     // MARK: - Pin
@@ -939,206 +653,14 @@ final class AppDelegate:
         loading: Bool
     ) {
 
-        guard let panel else {
-            return
-        }
-
-        // 高度与 ContentView 共用 TranslatePanelLayout，两者不会再各自漂移。
-        var desiredHeight =
-            TranslatePanelLayout.panelHeight(
-                original: original,
-                translated: translated,
-                isTranslating: loading
-            )
-
-        // 流式期间只增不减：每个 token 都重新排版会让窗口来回抖。
-        if loading {
-            desiredHeight =
-                max(
-                    desiredHeight,
-                    lastPanelHeight
-                )
-        }
-
-        let screen =
-            panel.screen
-            ??
-            currentScreen()
-
-        let finalHeight =
-            min(
-                max(
-                    desiredHeight,
-                    TranslatePanelLayout.baseHeight
+        panelPresenter?.apply(
+            height:
+                TranslatePanelLayout.panelHeight(
+                    original: original,
+                    translated: translated,
+                    isTranslating: loading
                 ),
-                maximumPanelHeight(
-                    on: screen
-                )
-            )
-
-        guard
-            abs(
-                finalHeight
-                - lastPanelHeight
-            ) >= 8
-        else {
-            return
-        }
-
-        lastPanelHeight =
-            finalHeight
-
-        resizePanel(
-            panel,
-            toHeight:
-                finalHeight
-        )
-    }
-
-    // MARK: - Resize
-
-    private func resizePanel(
-        _ panel: NSPanel,
-        toHeight requestedHeight: CGFloat
-    ) {
-
-        let screen =
-            panel.screen
-            ??
-            currentScreen()
-
-        let maximumHeight =
-            maximumPanelHeight(
-                on: screen
-            )
-
-        // 双保险：
-        // 无论调用者传多少，
-        // resizePanel 自己都不会允许超出安全高度。
-        let height =
-            min(
-                requestedHeight,
-                maximumHeight
-            )
-
-        guard
-            abs(
-                panel.frame.height
-                - height
-            ) >= 8
-        else {
-            keepPanelInsideScreen(
-                panel
-            )
-
-            return
-        }
-
-        var frame =
-            panel.frame
-
-        // 默认保持窗口顶部位置，
-        // 向下伸缩。
-        let oldTop =
-            frame.maxY
-
-        frame.size.height =
-            height
-
-        frame.origin.y =
-            oldTop - height
-
-        panel.setFrame(
-            frame,
-            display: true,
-            animate: false
-        )
-
-        // resize 完以后无条件再做一次
-        // 屏幕边界校正。
-        keepPanelInsideScreen(
-            panel
-        )
-    }
-
-    // MARK: - Keep Inside Screen
-
-    private func keepPanelInsideScreen(
-        _ panel: NSPanel
-    ) {
-
-        let screen =
-            panel.screen
-            ??
-            currentScreen()
-
-        guard let screen else {
-            return
-        }
-
-        let visible =
-            screen.visibleFrame
-
-        let margin:
-            CGFloat = 16
-
-        var frame =
-            panel.frame
-
-        // 左边。
-        if
-            frame.minX
-            <
-            visible.minX
-            + margin {
-
-            frame.origin.x =
-                visible.minX
-                + margin
-        }
-
-        // 右边。
-        if
-            frame.maxX
-            >
-            visible.maxX
-            - margin {
-
-            frame.origin.x =
-                visible.maxX
-                - frame.width
-                - margin
-        }
-
-        // 下边。
-        if
-            frame.minY
-            <
-            visible.minY
-            + margin {
-
-            frame.origin.y =
-                visible.minY
-                + margin
-        }
-
-        // 上边。
-        if
-            frame.maxY
-            >
-            visible.maxY
-            - margin {
-
-            frame.origin.y =
-                visible.maxY
-                - frame.height
-                - margin
-        }
-
-        panel.setFrame(
-            frame,
-            display: true,
-            animate: false
+            keepGrowingOnly: loading
         )
     }
 }
