@@ -51,7 +51,7 @@ final class MiniHUDViewModel: ObservableObject {
                 self.isTranslating = false
             } catch {
                 guard !Task.isCancelled else { return }
-                self.errorMessage = error.localizedDescription
+                self.errorMessage = OllamaFailure.message(for: error)
                 self.isTranslating = false
             }
         }

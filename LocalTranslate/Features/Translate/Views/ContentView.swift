@@ -343,14 +343,38 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
+    /// 失败时给出重试入口。
+    ///
+    /// 划词气泡一直有重试按钮，主面板此前只有一行红字——同一条链路上，
+    /// 小窗能自愈而大窗只能让用户重新划词，是反的。Ollama 没启动是最常见的
+    /// 失败，用户启动它之后需要的正是这一下。
     private func errorView(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(.red)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
 
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                viewModel.translate()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+
+                    Text("重试")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(viewModel.isTranslating)
+            .accessibilityLabel("重新翻译")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

@@ -57,6 +57,14 @@ run_suite "LiveSubtitlesLayoutTests" \
   LocalTranslate/Features/LiveSubtitles/Views/LiveSubtitlesOverlayLayout.swift \
   Tests/LiveSubtitlesLayoutTests.swift
 
+run_suite "OllamaFailureTests" \
+  LocalTranslate/Core/Config/AppSettings.swift \
+  LocalTranslate/Features/Translate/Models/TranslationLanguage.swift \
+  LocalTranslate/Features/Translate/Models/TranslationStyle.swift \
+  LocalTranslate/Core/Ollama/OllamaEndpoint.swift \
+  LocalTranslate/Core/Ollama/OllamaFailure.swift \
+  Tests/OllamaFailureTests.swift
+
 run_suite "TranslationLanguageTests" \
   LocalTranslate/Features/Translate/Models/TranslationLanguage.swift \
   Tests/TranslationLanguageTests.swift

@@ -276,7 +276,8 @@ final class TranslationViewModel:
                     }
 
                     self.errorMessage =
-                        "翻译失败：\(error.localizedDescription)"
+                        OllamaFailure
+                            .message(for: error)
 
                     self.isTranslating =
                         false

@@ -258,6 +258,11 @@ enum OllamaClientError:
         statusCode: Int
     )
 
+    /// 请求指定了模型，但 Ollama 说没有——这是 404 最常见的含义。
+    case modelNotFound(
+        model: String
+    )
+
     case noModels
 
     var errorDescription:
@@ -276,6 +281,16 @@ enum OllamaClientError:
 
             return
                 "Ollama 请求失败，HTTP \(statusCode)"
+
+        case .modelNotFound(
+            let model
+        ):
+
+            return
+                OllamaFailure
+                    .modelNotInstalledMessage(
+                        model: model
+                    )
 
         case .noModels:
 
@@ -326,10 +341,15 @@ final class OllamaClient {
                     customPrompt
             )
 
+        // 固定到局部量：404 要报的是这次真正请求的模型，
+        // 而不是显示报错时设置里恰好写着的那个。
+        let requestedModel =
+            AppSettings.model
+
         let body =
             OllamaChatRequest(
                 model:
-                    AppSettings.model,
+                    requestedModel,
 
                 messages: [
 
@@ -393,35 +413,10 @@ final class OllamaClient {
                     for: request
                 )
 
-        guard
-            let httpResponse =
-                response
-                as? HTTPURLResponse
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode: -1
-                    )
-        }
-
-        guard
-            (200...299)
-                .contains(
-                    httpResponse
-                        .statusCode
-                )
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode:
-                            httpResponse
-                                .statusCode
-                    )
-        }
+        try Self.validate(
+            response,
+            requestedModel: requestedModel
+        )
 
         var completeText =
             ""
@@ -629,35 +624,10 @@ final class OllamaClient {
                     for: request
                 )
 
-        guard
-            let httpResponse =
-                response
-                as? HTTPURLResponse
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode: -1
-                    )
-        }
-
-        guard
-            (200...299)
-                .contains(
-                    httpResponse
-                        .statusCode
-                )
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode:
-                            httpResponse
-                                .statusCode
-                    )
-        }
+        try Self.validate(
+            response,
+            requestedModel: nil
+        )
 
         let result =
             try JSONDecoder()
@@ -827,35 +797,10 @@ final class OllamaClient {
                         request
                 )
 
-        guard
-            let httpResponse =
-                response
-                as? HTTPURLResponse
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode: -1
-                    )
-        }
-
-        guard
-            (200...299)
-                .contains(
-                    httpResponse
-                        .statusCode
-                )
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode:
-                            httpResponse
-                                .statusCode
-                    )
-        }
+        try Self.validate(
+            response,
+            requestedModel: modelName
+        )
 
         guard
             let root =
@@ -1022,35 +967,10 @@ final class OllamaClient {
                         request
                 )
 
-        guard
-            let httpResponse =
-                response
-                as? HTTPURLResponse
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode: -1
-                    )
-        }
-
-        guard
-            (200...299)
-                .contains(
-                    httpResponse
-                        .statusCode
-                )
-        else {
-
-            throw
-                OllamaClientError
-                    .invalidResponse(
-                        statusCode:
-                            httpResponse
-                                .statusCode
-                    )
-        }
+        try Self.validate(
+            response,
+            requestedModel: nil
+        )
 
         let result =
             try JSONDecoder()
@@ -1200,6 +1120,59 @@ final class OllamaClient {
     }
 
     // MARK: - URL
+
+    /// 四个请求路径共用的响应校验。
+    ///
+    /// `requestedModel` 非空时，404 按「模型未安装」解释——这是 Ollama 对
+    /// 带模型的请求返回 404 的唯一常见原因；`/api/tags`、`/api/ps` 不带模型，
+    /// 它们的 404 只是普通的 HTTP 失败。
+    private static func validate(
+        _ response: URLResponse,
+        requestedModel: String?
+    ) throws {
+
+        guard
+            let httpResponse =
+                response
+                as? HTTPURLResponse
+        else {
+
+            throw
+                OllamaClientError
+                    .invalidResponse(
+                        statusCode: -1
+                    )
+        }
+
+        let statusCode =
+            httpResponse.statusCode
+
+        guard
+            !(200...299)
+                .contains(statusCode)
+        else {
+
+            return
+        }
+
+        if statusCode == 404,
+           let requestedModel {
+
+            throw
+                OllamaClientError
+                    .modelNotFound(
+                        model:
+                            requestedModel
+                    )
+        }
+
+        throw
+            OllamaClientError
+                .invalidResponse(
+                    statusCode:
+                        statusCode
+                )
+    }
 
     private func makeURL(
         path: String
