@@ -95,6 +95,9 @@ final class UsageStore: ObservableObject {
     }
 
     func stop() {
+        // 合并写入会推迟落盘，离开页面前先把最后一份快照写掉。
+        UsageDiskCache.shared.flush()
+
         refreshLoop?.cancel()
         refreshLoop = nil
 
