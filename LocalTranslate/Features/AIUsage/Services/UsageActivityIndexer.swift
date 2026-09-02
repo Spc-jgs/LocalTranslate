@@ -50,7 +50,7 @@ nonisolated final class UsageActivityIndexer: @unchecked Sendable {
         if sessionsURL == nil,
            databaseURL.standardizedFileURL == UsageIndex.defaultDatabaseURL.standardizedFileURL,
            snapshot.indexedFiles > 0 {
-            removeLegacyGrokCache()
+            removeLegacyCaches()
         }
         return snapshot
     }
@@ -112,17 +112,28 @@ nonisolated final class UsageActivityIndexer: @unchecked Sendable {
         }
     }
 
-    private func removeLegacyGrokCache() {
+    /// 清理已不再被任何代码读取的历史缓存文件。
+    ///
+    /// 这些文件不会自己消失：改用 SQLite 增量索引后它们就成了孤儿，
+    /// 一直占着用户的缓存目录。
+    private func removeLegacyCaches() {
         let fileManager = FileManager.default
-        let cacheRoot = fileManager.urls(
+        guard let cacheRoot = fileManager.urls(
             for: .cachesDirectory,
             in: .userDomainMask
-        ).first
-        let legacyURL = cacheRoot?
+        ).first else { return }
+
+        let appCache = cacheRoot
             .appendingPathComponent("LocalTranslate", isDirectory: true)
-            .appendingPathComponent("grok_sessions_cache.json")
-        if let legacyURL, fileManager.fileExists(atPath: legacyURL.path) {
-            try? fileManager.removeItem(at: legacyURL)
+
+        for name in [
+            "grok_sessions_cache.json",
+            "agy_transcripts_cache.json"
+        ] {
+            let legacyURL = appCache.appendingPathComponent(name)
+            if fileManager.fileExists(atPath: legacyURL.path) {
+                try? fileManager.removeItem(at: legacyURL)
+            }
         }
     }
 }
