@@ -211,6 +211,27 @@ commit 9c61419 为降低延迟把 `maximumWords` 从 16 降到 12、`lookaheadWo
 - CI 在 Release 构建**之前**运行该脚本。测试只写在设计文档里而不接入自动化，
   等同于没有测试。
 
+### 重排既有文件
+
+`.swift-format` 是排版的唯一出处（80 列、4 空格）。它按文件应用，不做仓库级
+一次性重排——那样的 diff 没人能 review。
+
+重排必须与逻辑修改**分成两个 commit**，且重排那一侧要给出等价性证据：
+
+```bash
+python3 Scripts/swift-token-diff.py 改前.swift 改后.swift
+```
+
+构建通过和测试全绿都排除不掉「手滑改了逻辑」——它们只说明改完之后仍然自洽。
+该脚本比对去注释、去无意义空白之后的记号流，逐字相同才算「只改了排版」。
+
+多行字符串字面量是例外：Swift 按结束分隔符的缩进剥离前导空白，格式化器移动
+整段时脚本会如实报差异。这种情况要把字面量抽出来交给编译器求值再比对，
+不能凭「应该没影响」放过——Prompt 正文属于用户可见行为。
+
+配置里 `OrderedImports` 与 `multiElementCollectionTrailingCommas` 关闭，
+它们会改动记号流，开着就无法做上面这条断言。
+
 ## 6. 构建、CI 与发布
 
 项目当前最低系统与 SDK 边界是 macOS 26 / Xcode 26，因为 `SpeechAnalyzer` 与 `SpeechTranscriber` 直接参与编译。
