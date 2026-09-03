@@ -128,6 +128,20 @@ nonisolated struct ModelActivity: Identifiable, Codable, Sendable {
 nonisolated struct UsageCatchUpProgress: Codable, Sendable, Equatable {
     let pending: Bool
     let progress: Int64
+    // 旧缓存里没有这两个字段，用 Optional 让它们缺失时解成 nil 而不是让
+    // 整份快照解码失败。
+    let indexedFiles: Int?
+    let candidateFiles: Int?
+
+    /// 补齐期间要说清「这个数字还是半截的」。只写「正在分片补齐」不够——
+    /// 补齐要跑一两分钟，中途的读数看上去和最终值没有区别，实际差好几倍。
+    var statusText: String? {
+        guard pending else { return nil }
+        guard let indexedFiles, let candidateFiles, candidateFiles > 0 else {
+            return "本地历史正在分片补齐，当前数字尚不完整"
+        }
+        return "本地历史正在分片补齐（\(indexedFiles)/\(candidateFiles) 个文件），当前数字尚不完整"
+    }
 }
 
 nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {

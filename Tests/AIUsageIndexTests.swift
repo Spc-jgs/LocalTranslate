@@ -25,7 +25,8 @@ struct AIUsageIndexTests {
                 providerID: "codex",
                 accountID: "account-a",
                 modelDisplayName: { $0 },
-                catchUpPending: false
+                catchUpPending: false,
+                candidateFiles: 1
             )
             expect(snapshot.indexedFiles == 1, "source file was not indexed")
             expect(
@@ -56,7 +57,8 @@ struct AIUsageIndexTests {
                 providerID: "codex",
                 accountID: "account-a",
                 modelDisplayName: { $0 },
-                catchUpPending: false
+                catchUpPending: false,
+                candidateFiles: 1
             )
             expect(
                 snapshot.periodActivity.first(where: { $0.period == .today })?.tokens == 250,
@@ -84,7 +86,8 @@ struct AIUsageIndexTests {
                 providerID: "codex",
                 accountID: "account-a",
                 modelDisplayName: { $0 },
-                catchUpPending: false
+                catchUpPending: false,
+                candidateFiles: 1
             )
             expect(
                 snapshot.periodActivity.first(where: { $0.period == .today })?.tokens == 15,
@@ -100,7 +103,8 @@ struct AIUsageIndexTests {
                 providerID: "codex",
                 accountID: "account-a",
                 modelDisplayName: { $0 },
-                catchUpPending: false
+                catchUpPending: false,
+                candidateFiles: 1
             )
             expect(snapshot.indexedFiles == 0, "missing source was not pruned")
             expect(
@@ -132,7 +136,8 @@ struct AIUsageIndexTests {
             providerID: "codex",
             accountID: "account-a",
             modelDisplayName: { $0 },
-            catchUpPending: false
+            catchUpPending: false,
+            candidateFiles: 1
         )
         expect(
             snapshot.periodActivity.first(where: { $0.period == .today })?.tokens == 10,

@@ -68,10 +68,24 @@ nonisolated struct IndexedActivitySnapshot: Sendable {
     let dailyActivity: [DailyActivity]
     let modelActivity: [ModelActivity]
     let indexedFiles: Int
+    /// 这一轮枚举到的候选文件总数。和 `indexedFiles` 一起构成补齐进度——
+    /// 没有分母，用户就分不出「补齐中的半截数字」和「最终值」。
+    let candidateFiles: Int
     /// 已解析字节（AGY 是已读行号）的总和。这是分片补齐的推进标尺：
     /// 两轮之间它不变，就说明这一片什么也没读进来，续扫只会空转。
     let indexedProgress: Int64
     let catchUpPending: Bool
+}
+
+extension UsageCatchUpProgress {
+    init(indexed snapshot: IndexedActivitySnapshot) {
+        self.init(
+            pending: snapshot.catchUpPending,
+            progress: snapshot.indexedProgress,
+            indexedFiles: snapshot.indexedFiles,
+            candidateFiles: snapshot.candidateFiles
+        )
+    }
 }
 
 nonisolated final class UsageIndex {
@@ -337,7 +351,8 @@ nonisolated final class UsageIndex {
         providerID: String,
         accountID: String,
         modelDisplayName: (String) -> String,
-        catchUpPending: Bool
+        catchUpPending: Bool,
+        candidateFiles: Int
     ) throws -> IndexedActivitySnapshot {
         let daily = try aggregateDaily(providerID: providerID, accountID: accountID)
         let periods = try aggregatePeriods(
@@ -372,6 +387,7 @@ nonisolated final class UsageIndex {
             dailyActivity: daily,
             modelActivity: models,
             indexedFiles: count,
+            candidateFiles: candidateFiles,
             indexedProgress: progress,
             catchUpPending: catchUpPending
         )

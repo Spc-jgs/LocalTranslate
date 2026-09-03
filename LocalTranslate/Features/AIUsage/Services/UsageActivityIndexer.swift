@@ -467,7 +467,8 @@ private nonisolated struct CodexIncrementalIndexer {
             providerID: providerID,
             accountID: accountID,
             modelDisplayName: CodexProvider.displayCodexModelName,
-            catchUpPending: catchUpPending
+            catchUpPending: catchUpPending,
+            candidateFiles: files.count
         )
     }
 
@@ -724,7 +725,8 @@ private nonisolated struct GrokIncrementalIndexer {
             providerID: providerID,
             accountID: accountID,
             modelDisplayName: displayModelName,
-            catchUpPending: catchUpPending
+            catchUpPending: catchUpPending,
+            candidateFiles: files.count
         )
     }
 
@@ -1083,7 +1085,8 @@ private nonisolated struct LocalJSONLUsageIndexer {
             providerID: providerID,
             accountID: accountID,
             modelDisplayName: displayModelName,
-            catchUpPending: catchUpPending
+            catchUpPending: catchUpPending,
+            candidateFiles: files.count
         )
     }
 
@@ -1376,7 +1379,8 @@ private nonisolated struct AGYIncrementalIndexer {
             providerID: providerID,
             accountID: accountID,
             modelDisplayName: displayModelName,
-            catchUpPending: catchUpPending
+            catchUpPending: catchUpPending,
+            candidateFiles: files.count
         )
     }
 

@@ -31,6 +31,7 @@ nonisolated struct CodexProvider: UsageProvider {
                 dailyActivity: [],
                 modelActivity: [],
                 indexedFiles: 0,
+                candidateFiles: 0,
                 indexedProgress: 0,
                 catchUpPending: false
             )
@@ -129,10 +130,11 @@ nonisolated struct CodexProvider: UsageProvider {
                 costUSD: nil
             )
         ]
+        let codexCatchUp = UsageCatchUpProgress(indexed: localUsage)
         let combinedStatus = [
             responses.statusMessage,
             activityError,
-            localUsage.catchUpPending ? "本地历史正在分片补齐" : nil
+            codexCatchUp.statusText
         ].compactMap { $0 }.joined(separator: "；")
 
         return AccountSnapshot(
@@ -158,10 +160,7 @@ nonisolated struct CodexProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: !windows.isEmpty,
             activityAvailable: activityError == nil || !serverDaily.isEmpty,
-            catchUp: UsageCatchUpProgress(
-                pending: localUsage.catchUpPending,
-                progress: localUsage.indexedProgress
-            )
+            catchUp: codexCatchUp
         )
     }
 

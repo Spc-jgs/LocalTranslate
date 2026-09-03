@@ -52,6 +52,7 @@ struct AGYProvider: UsageProvider {
                 && $0.turns == 0
                 && $0.usage.totalTokens == 0
         }
+        let catchUp = UsageCatchUpProgress(indexed: activityValue)
         let status = [
             quotaError.map { "实时额度不可用：\($0)" },
             activityAvailable && activityIsEstimated
@@ -60,7 +61,7 @@ struct AGYProvider: UsageProvider {
             activityHasWaitingModel
                 ? "已识别本机会话模型；缺少可验证事件时间的 Token 不归入今日，等待上游落盘。"
                 : nil,
-            activityValue.catchUpPending ? "活动历史正在分片补齐。" : nil,
+            catchUp.statusText,
             activityError.map { "活动索引不可用：\($0)" }
         ].compactMap { $0 }.joined(separator: "；")
 
@@ -109,10 +110,7 @@ struct AGYProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: quotaValue != nil,
             activityAvailable: activityAvailable,
-            catchUp: UsageCatchUpProgress(
-                pending: activityValue.catchUpPending,
-                progress: activityValue.indexedProgress
-            )
+            catchUp: catchUp
         )
     }
 
@@ -139,6 +137,7 @@ struct AGYProvider: UsageProvider {
         dailyActivity: [],
         modelActivity: [],
         indexedFiles: 0,
+        candidateFiles: 0,
         indexedProgress: 0,
         catchUpPending: false
     )

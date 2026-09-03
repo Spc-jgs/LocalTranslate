@@ -23,9 +23,10 @@ struct ClaudeProvider: UsageProvider {
             providerID: providerID,
             claudeHome: claudeHome
         )
+        let catchUp = UsageCatchUpProgress(indexed: local)
         var messages: [String] = []
-        if local.catchUpPending {
-            messages.append("Claude 历史正在分片补齐")
+        if let progress = catchUp.statusText {
+            messages.append(progress)
         }
         if let fetchedAt = quota.fetchedAt, !quota.isFresh {
             messages.append(
@@ -54,10 +55,7 @@ struct ClaudeProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
             activityAvailable: true,
-            catchUp: UsageCatchUpProgress(
-                pending: local.catchUpPending,
-                progress: local.indexedProgress
-            )
+            catchUp: catchUp
         )
     }
 

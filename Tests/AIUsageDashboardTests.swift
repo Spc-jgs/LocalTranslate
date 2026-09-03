@@ -4,7 +4,8 @@ import Foundation
 struct AIUsageDashboardTests {
     static func main() {
         selectedHistoryRangeControlsModelTotals()
-        print("AIUsageDashboardTests: 3 passed")
+        catchUpStatusSaysTheNumbersAreIncomplete()
+        print("AIUsageDashboardTests: 4 passed")
     }
 
     private static func selectedHistoryRangeControlsModelTotals() {
@@ -68,5 +69,41 @@ struct AIUsageDashboardTests {
         _ message: String
     ) {
         if !condition() { fatalError(message) }
+    }
+
+    /// 补齐要跑一两分钟，中途的读数看上去和最终值没有区别——实测差过好几倍。
+    /// 所以 pending 期间必须说清数字不完整，并给出分母。
+    private static func catchUpStatusSaysTheNumbersAreIncomplete() {
+        let running = UsageCatchUpProgress(
+            pending: true,
+            progress: 1_024,
+            indexedFiles: 37,
+            candidateFiles: 248
+        )
+        guard let text = running.statusText else {
+            fatalError("补齐进行中却没有任何提示")
+        }
+        expect(text.contains("37/248"), "补齐提示没有给出进度分母")
+        expect(text.contains("不完整"), "补齐提示没有说明数字还不完整")
+
+        let done = UsageCatchUpProgress(
+            pending: false,
+            progress: 4_096,
+            indexedFiles: 248,
+            candidateFiles: 248
+        )
+        expect(done.statusText == nil, "补齐结束后仍在提示数字不完整")
+
+        // 旧缓存里没有文件数；没有分母也得说清数字不完整。
+        let legacy = UsageCatchUpProgress(
+            pending: true,
+            progress: 512,
+            indexedFiles: nil,
+            candidateFiles: nil
+        )
+        expect(
+            legacy.statusText?.contains("不完整") == true,
+            "缺少文件数时补齐提示消失了"
+        )
     }
 }

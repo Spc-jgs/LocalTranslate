@@ -14,11 +14,12 @@ struct GrokProvider: UsageProvider {
         )
         let localSnapshot = try await local
         let remoteOutcome = await remote
+        let catchUp = UsageCatchUpProgress(indexed: localSnapshot)
 
         let combinedStatus = [
             remoteOutcome.snapshot?.statusMessage,
             remoteOutcome.errorMessage,
-            localSnapshot.catchUpPending ? "本地历史正在分片补齐" : nil,
+            catchUp.statusText,
             hasPendingModelEvidence(localSnapshot)
                 ? "当前会话已识别模型，Token 与活动次数将在任务完成后落盘"
                 : nil
@@ -45,10 +46,7 @@ struct GrokProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: remoteOutcome.snapshot != nil,
             activityAvailable: true,
-            catchUp: UsageCatchUpProgress(
-                pending: localSnapshot.catchUpPending,
-                progress: localSnapshot.indexedProgress
-            )
+            catchUp: catchUp
         )
     }
 

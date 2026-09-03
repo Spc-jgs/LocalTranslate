@@ -31,9 +31,9 @@ struct QwenTokenPlanProvider: UsageProvider {
             providerID: providerID,
             qwenHome: qwenHome
         )
-        let status = local.catchUpPending
-            ? "Qwen Code 本机用量正在分片补齐；Credits 与套餐余额以百炼控制台为准。"
-            : "展示 Qwen Code 对该 Token Plan 配置记录的本机 Token；Credits 抵扣与套餐余额以百炼控制台为准。"
+        let status = UsageCatchUpProgress(indexed: local).statusText
+            .map { "Qwen Code \($0)；Credits 与套餐余额以百炼控制台为准。" }
+            ?? "展示 Qwen Code 对该 Token Plan 配置记录的本机 Token；Credits 抵扣与套餐余额以百炼控制台为准。"
         return snapshot(activity: local, status: status)
     }
 
@@ -60,12 +60,7 @@ struct QwenTokenPlanProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
             activityAvailable: true,
-            catchUp: activity.map {
-                UsageCatchUpProgress(
-                    pending: $0.catchUpPending,
-                    progress: $0.indexedProgress
-                )
-            }
+            catchUp: activity.map(UsageCatchUpProgress.init(indexed:))
         )
     }
 
