@@ -72,6 +72,9 @@ public final class LiveTranslationService {
     private struct TranslationJob {
         let key: LiveTranslationRequestKey
         let sourceText: String
+        /// 已经显示在字幕条上的译文。非空时作为 prefill 送进请求末尾，
+        /// 模型只能往后写，屏幕上的字因此不会被改写。
+        let continuing: String
         let context: [SubtitleItem]
         let sourceLanguage: SubtitleSourceLanguage
         let archivable: Bool
@@ -99,6 +102,7 @@ public final class LiveTranslationService {
     public func translatePreview(
         key: LiveTranslationRequestKey,
         _ text: String,
+        continuing: String = "",
         context: [SubtitleItem] = [],
         sourceLanguage: SubtitleSourceLanguage,
         onPartial: @escaping @MainActor (LiveTranslationRequestKey, String) -> Void,
@@ -117,6 +121,7 @@ public final class LiveTranslationService {
             TranslationJob(
                 key: key,
                 sourceText: sourceText,
+                continuing: continuing,
                 context: Array(context.suffix(1)),
                 sourceLanguage: sourceLanguage,
                 archivable: false,
@@ -221,9 +226,12 @@ public final class LiveTranslationService {
             return
         }
 
+        // 整句定稿不做续写：这是这段语音唯一一次可以推翻先前措辞的机会，
+        // 锁住前缀等于把 preview 阶段的错译一起定死。
         let job = TranslationJob(
             key: key,
             sourceText: sourceText,
+            continuing: "",
             context: Array(context.suffix(1)),
             sourceLanguage: sourceLanguage,
             archivable: true,
@@ -344,6 +352,7 @@ public final class LiveTranslationService {
             do {
                 translatedText = try await streamTranslation(
                     job.sourceText,
+                    continuing: job.continuing,
                     context: job.context,
                     sourceLanguage: job.sourceLanguage,
                     key: job.key,
@@ -367,6 +376,7 @@ public final class LiveTranslationService {
 
     private func streamTranslation(
         _ sourceText: String,
+        continuing: String,
         context: [SubtitleItem],
         sourceLanguage: SubtitleSourceLanguage,
         key: LiveTranslationRequestKey,
@@ -386,6 +396,13 @@ public final class LiveTranslationService {
             }
         }
         messages.append(.init(role: "user", content: sourceText))
+        // 末尾放一条 assistant，语义是「你已经写到这里了，接着写」。模型返回
+        // 的就只是增量——已经显示出去的字物理上不可能被改写。实测第一份真实
+        // 日志里改写占 94%、新旧译文公共前缀平均只有 19%，那是每次都在重新
+        // 组织整句措辞；这条消息把重译变成续写。
+        if !continuing.isEmpty {
+            messages.append(.init(role: "assistant", content: continuing))
+        }
 
         let body = ChatRequest(
             model: AppSettings.model,
@@ -429,7 +446,10 @@ public final class LiveTranslationService {
                     firstTokenAt = Date()
                 }
                 fullTranslation += content
-                let cleaned = cleanModelOutput(fullTranslation)
+                let cleaned = LiveCaptionPresenter.stitch(
+                    prefix: continuing,
+                    continuation: cleanModelOutput(fullTranslation)
+                )
                 if shouldPublishPartial(
                     cleaned,
                     after: lastPublishedPartial
@@ -453,7 +473,10 @@ public final class LiveTranslationService {
                 break
             }
         }
-        return cleanModelOutput(fullTranslation)
+        return LiveCaptionPresenter.stitch(
+            prefix: continuing,
+            continuation: cleanModelOutput(fullTranslation)
+        )
     }
 
     private func shouldPublishPartial(

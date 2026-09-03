@@ -50,6 +50,34 @@ nonisolated struct LiveCaptionPresenter {
         return .replace(incoming)
     }
 
+    /// 把续写结果接回已经显示出去的前缀。
+    ///
+    /// 让模型接着已有译文往下写（请求末尾放一条 assistant），返回的正常是增量
+    /// 部分——已显示的字因此物理上不可能被改写，这是「翻译到一半整段被覆盖」
+    /// 唯一的根治办法。但不能假定每个模型都守规矩：有的会把前缀重复一遍，
+    /// 有的只重复末尾几个字，所以这里按最长重叠去重再拼。
+    static func stitch(prefix: String, continuation: String) -> String {
+        let continuation = continuation.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !prefix.isEmpty else { return continuation }
+        guard !continuation.isEmpty else { return prefix }
+
+        // 整段重复：模型把前缀又写了一遍。
+        if continuation.hasPrefix(prefix) { return continuation }
+
+        // 部分重复：续写的开头和前缀的结尾撞上了。
+        let prefixCharacters = Array(prefix)
+        let overlapLimit = min(prefixCharacters.count, continuation.count)
+        for length in stride(from: overlapLimit, through: 1, by: -1) {
+            let tail = String(prefixCharacters.suffix(length))
+            if continuation.hasPrefix(tail) {
+                return prefix + continuation.dropFirst(length)
+            }
+        }
+        return prefix + continuation
+    }
+
     /// 一句话 commit 之后在字幕条上定格多久。
     ///
     /// 说完一句到下一句的 preview 出现之间通常只有几百毫秒，不定格的话完整

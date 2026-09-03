@@ -8,7 +8,8 @@ struct LiveCaptionPresenterTests {
         captionNeverShrinksBackWithinTheHold()
         identicalTextDoesNotTouchTheScreen()
         committedCaptionHoldsItsSlot()
-        print("LiveCaptionPresenterTests: 5 passed")
+        stitchJoinsContinuationOntoWhatIsAlreadyOnScreen()
+        print("LiveCaptionPresenterTests: 6 passed")
     }
 
     /// 往后长不算打断阅读：已读的字一个没动，节流反而让字幕白白落后。
@@ -101,5 +102,45 @@ struct LiveCaptionPresenterTests {
             FileHandle.standardError.write(Data("✗ \(message)\n".utf8))
             exit(1)
         }
+    }
+
+    /// 让模型接着已有译文写，返回的正常是增量；但不能假定每个模型都守规矩。
+    private static func stitchJoinsContinuationOntoWhatIsAlreadyOnScreen() {
+        expect(
+            LiveCaptionPresenter.stitch(
+                prefix: "它知道你",
+                continuation: "今晚赶不上会议了。"
+            ) == "它知道你今晚赶不上会议了。",
+            "正常增量没有接对"
+        )
+
+        // 模型把前缀整段重复了一遍。
+        expect(
+            LiveCaptionPresenter.stitch(
+                prefix: "它知道你",
+                continuation: "它知道你今晚赶不上会议了。"
+            ) == "它知道你今晚赶不上会议了。",
+            "整段重复的前缀没有去掉"
+        )
+
+        // 只重复了前缀的末尾几个字。
+        expect(
+            LiveCaptionPresenter.stitch(
+                prefix: "它知道你",
+                continuation: "道你今晚赶不上会议了。"
+            ) == "它知道你今晚赶不上会议了。",
+            "部分重叠没有去掉"
+        )
+
+        expect(
+            LiveCaptionPresenter.stitch(prefix: "", continuation: "它知道你")
+                == "它知道你",
+            "没有前缀时应当原样返回续写"
+        )
+        expect(
+            LiveCaptionPresenter.stitch(prefix: "它知道你", continuation: "   ")
+                == "它知道你",
+            "空续写把已显示的字幕清掉了"
+        )
     }
 }

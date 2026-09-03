@@ -462,14 +462,39 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             )
             return
         }
-        // 这一道是「防倒退」，但 preview 会把 displayedAudioEnd 推到最新语音
-        // 位置，而整句的 range 必然更早——它是不是恒为假，看日志说话。
+
+        // 定稿的整句先占住上面那一行。它完整、准确，而且没有必要和正在说的话
+        // 抢主行。上一版把这一行绑在「能否上主行」上，而那道门槛几乎恒为假
+        // （实测 65 次里挡掉 62 次），于是上一行三分半只换了三次，看着就是
+        // 固定在那儿不动。
+        previousCaptionText = resolved
+        lastCommittedCaption = resolved
+        diagnostics.segmentCommitted(
+            words: pending.sourceText
+                .split(whereSeparator: \Character.isWhitespace).count,
+            lag: displayLag
+        )
+
+        // 主行只在说话停下来时才让整句接管：讲话还在继续时，preview 已经跑到
+        // 更后面，把主行拉回刚说完的那句就是倒退。
+        let caughtUpToSpeech = latestRecognizedAudioEnd - key.audioRange.end
+            <= silenceFlushInterval + 0.2
+        guard caughtUpToSpeech else {
+            diagnostics.commitBlocked(
+                reason: "stillSpeaking",
+                windowEnd: key.audioRange.end,
+                displayedEnd: displayedAudioEnd
+            )
+            refreshLiveSource()
+            return
+        }
         guard key.audioRange.end > displayedAudioEnd + 0.2 else {
             diagnostics.commitBlocked(
                 reason: "behindDisplayed",
                 windowEnd: key.audioRange.end,
                 displayedEnd: displayedAudioEnd
             )
+            refreshLiveSource()
             return
         }
         diagnostics.commitAccepted(
@@ -481,11 +506,6 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             sourceText: pending.sourceText,
             audioEnd: key.audioRange.end,
             isCommitted: true
-        )
-        diagnostics.segmentCommitted(
-            words: pending.sourceText
-                .split(whereSeparator: \Character.isWhitespace).count,
-            lag: displayLag
         )
         refreshLiveSource()
     }
@@ -576,9 +596,17 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         lastPreviewRequestedSourceText = sourceText
         let mayStreamInitialTranslation = currentTranslatedText.isEmpty
 
+        // 只有当新的源文本确实是已翻译那段的延长时才续写；换句了就重新开始，
+        // 否则会把上一句的译文接到下一句前面。
+        let continuing = LivePreviewStabilityPolicy.canRetainDisplayedTranslation(
+            displayedSource: displayedTranslationSourceText,
+            while: sourceText
+        ) ? currentTranslatedText : ""
+
         translationService.translatePreview(
             key: key,
             sourceText,
+            continuing: continuing,
             context: liveTranslationContext,
             sourceLanguage: sourceLanguage,
             onPartial: { [weak self] responseKey, partialText in
@@ -753,13 +781,9 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
         pendingCaption = nil
         lastCaptionChangeAt = now
-        if isCommitted {
-            // 新的整句顶上来，上一条整句降权到上面那行。preview 的改口不算
-            // 换句，不动这一行。
-            previousCaptionText = lastCommittedCaption
-            lastCommittedCaption = text
-            lastCommitAt = now
-        }
+        // 上一行由 handleStableCompletion 在整句定稿时直接更新，不再等它
+        // 能不能上主行。这里只记定格起点。
+        if isCommitted { lastCommitAt = now }
         currentOriginalText = sourceText
         displayedTranslationSourceText = sourceText
         displayedAudioEnd = max(displayedAudioEnd, audioEnd)
