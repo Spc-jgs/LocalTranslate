@@ -504,6 +504,34 @@ struct LiveSubtitleSemanticSegmenter {
         return (segments, remainder)
     }
 
+    /// 源文本超过上界时，从一个从句边界开始，而不是硬砍最后 N 个词。
+    ///
+    /// preview 的起点每挪动一次，译文就整段重写一次——「一句话翻译到一半突然
+    /// 全被覆盖」正是这么来的。锚在边界上，起点在一句话内保持不动，模型每次
+    /// 拿到的都是同一个前缀加一点新内容，译文才有条件只往后长。
+    ///
+    /// 边界取「最靠前且剩余不超上界」的那个：上下文留得越多，翻译越准，
+    /// 而锚点只在真的超界时才往后跳一次。
+    static func previewAnchor(in text: String, maximumWords: Int) -> String {
+        let normalized = normalize(text)
+        let words = normalized
+            .split(whereSeparator: \Character.isWhitespace)
+            .map(String.init)
+        guard words.count > maximumWords else { return normalized }
+
+        var boundaries: [Int] = []
+        for (index, word) in words.enumerated() where index + 1 < words.count {
+            guard let last = word.last(where: { !$0.isWhitespace }) else { continue }
+            if sentenceTerminators.contains(last) || clauseTerminators.contains(last) {
+                boundaries.append(index + 1)
+            }
+        }
+        if let start = boundaries.first(where: { words.count - $0 <= maximumWords }) {
+            return words[start...].joined(separator: " ")
+        }
+        return words.suffix(maximumWords).joined(separator: " ")
+    }
+
     static func join(_ lhs: String, _ rhs: String) -> String {
         normalize([lhs, rhs].filter { !$0.isEmpty }.joined(separator: " "))
     }

@@ -285,20 +285,38 @@ public struct LiveSubtitlesView: View {
         // 两行的角色全程固定：上面永远是译文，下面永远是原文。原来主行会在
         // 「还没有译文时显示英文原文」和「有译文后显示中文」之间切换，同时下面
         // 那行原文时有时无——语言和行数一起跳，眼睛每次都要重新找位置。
-        VStack(spacing: 3) {
+        VStack(spacing: LiveSubtitlesOverlayLayout.captionSourceSpacing) {
+            // 上一句，降权。只看一句话接不上语境；它和当前句、原文行一起
+            // 构成三行固定结构，位置全程不动。
             if shouldShowTranslation {
+                Text(viewModel.previousCaptionText)
+                    .font(
+                        .system(
+                            size: max(
+                                viewModel.fontSize
+                                    * LiveSubtitlesOverlayLayout.previousScale,
+                                LiveSubtitlesOverlayLayout.previousMinimumSize
+                            ),
+                            weight: .medium
+                        )
+                    )
+                    .foregroundColor(.white.opacity(0.42))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1, reservesSpace: true)
+                    .truncationMode(.head)
+                    .frame(maxWidth: LiveSubtitlesOverlayLayout.captionMaximumWidth)
+                    .shadow(color: .black.opacity(0.9), radius: 2, x: 0, y: 1)
+            }
+
+            if shouldShowTranslation {
+                // 不给字幕加色块底：半透明面板上再叠一层蓝，短句时还会留下
+                // 一大片空色块。字幕的可读性交给描边式的双层阴影。
                 Text(primaryCaptionText)
                     .font(.system(size: viewModel.fontSize, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(2, reservesSpace: true)
                     .frame(maxWidth: LiveSubtitlesOverlayLayout.captionMaximumWidth)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(
-                        Color.accentColor.opacity(primaryCaptionText.isEmpty ? 0 : 0.14),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
                     .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
                     .shadow(color: .black.opacity(0.9), radius: 6, x: 0, y: 2)
                     // 追加时 captionRewriteCount 不变，文字顺着长、不带动画；

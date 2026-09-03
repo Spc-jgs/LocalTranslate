@@ -18,7 +18,8 @@ struct LiveSubtitlePipelineStateTests {
         compatiblePreviewGrowthRetainsDisplayedTranslation()
         requestRevisionAndRangeRejectStaleKey()
         finalIdentityRejectsDuplicateAndOldSession()
-        print("LiveSubtitlePipelineStateTests: 15 passed")
+        previewAnchorHoldsItsStartWhileTheSentenceGrows()
+        print("LiveSubtitlePipelineStateTests: 16 passed")
     }
 
     private static func volatileRangeReplacesInsteadOfAppending() {
@@ -429,5 +430,49 @@ struct LiveSubtitlePipelineStateTests {
         guard condition() else {
             fatalError("LiveSubtitlePipelineStateTests failed: \(message)")
         }
+    }
+
+    /// preview 的起点每挪一次，译文就整段重写一次。锚点必须在一句话说完之前
+    /// 保持不动——这是展示层能走「只追加」的前提。
+    private static func previewAnchorHoldsItsStartWhileTheSentenceGrows() {
+        // 没超上界就整段拿去翻，起点是句首。
+        let short = LiveSubtitleSemanticSegmenter.previewAnchor(
+            in: "It knows that you can't make it",
+            maximumWords: 28
+        )
+        expect(
+            short == "It knows that you can't make it",
+            "没超上界却截断了源文本"
+        )
+
+        // 说话继续，只要不超上界，起点一个词都不能动。
+        let grown = LiveSubtitleSemanticSegmenter.previewAnchor(
+            in: "It knows that you can't make it to the meeting tonight",
+            maximumWords: 28
+        )
+        expect(
+            grown.hasPrefix("It knows that"),
+            "句子变长之后起点跟着滑走了"
+        )
+
+        // 超界时切在从句边界之后，而不是硬砍最后 N 个词。
+        let long = LiveSubtitleSemanticSegmenter.previewAnchor(
+            in: "one two three four five, six seven eight nine ten eleven twelve",
+            maximumWords: 8
+        )
+        expect(
+            long == "six seven eight nine ten eleven twelve",
+            "超界时没有切在从句边界上，实得：\(long)"
+        )
+
+        // 完全没有标点时仍要有上界，不能无限增长。
+        let noPunctuation = LiveSubtitleSemanticSegmenter.previewAnchor(
+            in: "one two three four five six seven eight nine ten",
+            maximumWords: 4
+        )
+        expect(
+            noPunctuation == "seven eight nine ten",
+            "没有标点时上界失效了，实得：\(noPunctuation)"
+        )
     }
 }

@@ -16,6 +16,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     @Published public var audioLevel: Float = 0
     @Published public var currentOriginalText = ""
     @Published public var currentTranslatedText = ""
+    /// 上一条整句译文，降权显示在当前句上面。只看一句话很难接上语境。
+    @Published public private(set) var previousCaptionText = ""
     @Published public var subtitleHistory: [SubtitleItem] = []
     @Published public var showHistoryDrawer = false
     @Published public var errorMessage: String?
@@ -67,6 +69,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private var lastCaptionChangeAt: ContinuousClock.Instant?
     private var lastCommitAt: ContinuousClock.Instant?
     private var pendingCaption: PendingCaption?
+    private var lastCommittedCaption = ""
     /// 每次「改写」自增，View 拿它当动画身份——追加时不变，整行替换才淡入。
     @Published public private(set) var captionRewriteCount = 0
 
@@ -567,8 +570,17 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         }
     }
 
+    /// preview 要翻译的那段源文本。
+    ///
+    /// 原先固定取最后 10 个词，是个跟着说话滑动的窗口：起点每次都在动，模型
+    /// 每次拿到的都是不同的片段，于是同一句话被反复重译成不同的半截中文。
+    /// 现在锚在从句边界上，一句话说完之前起点不动，译文因此能只往后长——
+    /// 展示层的 `LiveCaptionPresenter` 也只有在这个前提下才有追加可走。
+    ///
+    /// 上界放宽到 28 个词：请求变大会让单次翻译慢一些，但重写次数下来了，
+    /// 屏幕上真正发生的变化反而更少。
     private func boundedPreviewCandidate(
-        maximumWords: Int = 10
+        maximumWords: Int = 28
     ) -> (sourceText: String, range: LiveAudioTimeRange) {
         let words = latestLiveSourceText
             .split(whereSeparator: \Character.isWhitespace)
@@ -577,12 +589,19 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             return (latestLiveSourceText, latestLiveSourceRange)
         }
 
-        let droppedWordCount = words.count - maximumWords
+        let anchored = LiveSubtitleSemanticSegmenter.previewAnchor(
+            in: latestLiveSourceText,
+            maximumWords: maximumWords
+        )
+        let anchoredWordCount = anchored
+            .split(whereSeparator: \Character.isWhitespace)
+            .count
+        let droppedWordCount = max(words.count - anchoredWordCount, 0)
         let droppedFraction = Double(droppedWordCount) / Double(words.count)
         let adjustedStart = latestLiveSourceRange.start
             + latestLiveSourceRange.duration * droppedFraction
         return (
-            words.suffix(maximumWords).joined(separator: " "),
+            anchored,
             LiveAudioTimeRange(
                 start: adjustedStart,
                 duration: max(latestLiveSourceRange.end - adjustedStart, 0)
@@ -655,7 +674,13 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
         pendingCaption = nil
         lastCaptionChangeAt = now
-        if isCommitted { lastCommitAt = now }
+        if isCommitted {
+            // 新的整句顶上来，上一条整句降权到上面那行。preview 的改口不算
+            // 换句，不动这一行。
+            previousCaptionText = lastCommittedCaption
+            lastCommittedCaption = text
+            lastCommitAt = now
+        }
         currentOriginalText = sourceText
         displayedTranslationSourceText = sourceText
         displayedAudioEnd = max(displayedAudioEnd, audioEnd)
@@ -700,6 +725,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         displayedAudioEnd = 0
         currentOriginalText = ""
         currentTranslatedText = ""
+        previousCaptionText = ""
+        lastCommittedCaption = ""
         pendingCaption = nil
         lastCaptionChangeAt = nil
         lastCommitAt = nil

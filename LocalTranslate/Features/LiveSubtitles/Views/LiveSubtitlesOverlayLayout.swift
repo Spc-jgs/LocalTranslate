@@ -17,6 +17,9 @@ nonisolated enum LiveSubtitlesOverlayLayout {
     /// 原文行相对译文的字号比例，与 `LiveSubtitlesView` 保持一致。
     static let sourceScale: CGFloat = 0.56
     static let sourceMinimumSize: CGFloat = 14
+    /// 上一条整句的字号比例。它降权显示在当前句上面，只占一行。
+    static let previousScale: CGFloat = 0.52
+    static let previousMinimumSize: CGFloat = 13
     /// SF Pro 的行高约为字号的 1.2 倍，留一点余量。
     static let lineHeightFactor: CGFloat = 1.25
     /// 译文与原文之间的间距。
@@ -41,8 +44,14 @@ nonisolated enum LiveSubtitlesOverlayLayout {
             max(fontSize * sourceScale, sourceMinimumSize)
             * lineHeightFactor
 
+        let previousBlock =
+            max(fontSize * previousScale, previousMinimumSize)
+            * lineHeightFactor
+
         return ceil(
-            captionBlock
+            previousBlock
+            + captionSourceSpacing
+            + captionBlock
             + captionSourceSpacing
             + sourceBlock
             + verticalChrome

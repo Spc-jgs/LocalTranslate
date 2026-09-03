@@ -47,7 +47,17 @@ struct LiveSubtitlesLayoutTests {
                 ),
                 weight: .medium
             )
-            let needed = captionHeight
+            let previousHeight = measure(
+                lines: 1,
+                fontSize: max(
+                    size * LiveSubtitlesOverlayLayout.previousScale,
+                    LiveSubtitlesOverlayLayout.previousMinimumSize
+                ),
+                weight: .medium
+            )
+            let needed = previousHeight
+                + LiveSubtitlesOverlayLayout.captionSourceSpacing
+                + captionHeight
                 + LiveSubtitlesOverlayLayout.captionSourceSpacing
                 + sourceHeight
 
@@ -62,14 +72,37 @@ struct LiveSubtitlesLayoutTests {
         }
     }
 
-    /// 默认字号下不应偏离既有观感太多——此前写死的是 124pt。
+    /// 高度要贴合内容，不能白留一大片空。
+    ///
+    /// 这条原先写死「贴近 124pt」，于是字幕从两行结构改成三行（多了一行降权的
+    /// 上一句）时它就红了——而那次变高是有意的。写死数值只能记住昨天长什么样，
+    /// 改成断言「富余不超过 chrome 的预算」才是真正要守的东西。
     private static func defaultSizeStaysCloseToTheShippedHeight() {
-        let height = LiveSubtitlesOverlayLayout.compactHeight(
-            fontSize: AppSettings.defaultLiveFontSize
+        let size = AppSettings.defaultLiveFontSize
+        let height = LiveSubtitlesOverlayLayout.compactHeight(fontSize: size)
+        let needed = measure(
+            lines: 1,
+            fontSize: max(
+                size * LiveSubtitlesOverlayLayout.previousScale,
+                LiveSubtitlesOverlayLayout.previousMinimumSize
+            ),
+            weight: .medium
         )
+            + LiveSubtitlesOverlayLayout.captionSourceSpacing
+            + measure(lines: 2, fontSize: size, weight: .bold)
+            + LiveSubtitlesOverlayLayout.captionSourceSpacing
+            + measure(
+                lines: 1,
+                fontSize: max(
+                    size * LiveSubtitlesOverlayLayout.sourceScale,
+                    LiveSubtitlesOverlayLayout.sourceMinimumSize
+                ),
+                weight: .medium
+            )
+        let slack = height - needed
         expect(
-            abs(height - 124) <= 6,
-            "default font size should stay near the previous 124pt, got \(height)"
+            slack >= 0 && slack <= LiveSubtitlesOverlayLayout.verticalChrome + 8,
+            "折叠高度 \(height) 相对内容 \(needed) 富余 \(slack)，超出留白预算"
         )
     }
 
