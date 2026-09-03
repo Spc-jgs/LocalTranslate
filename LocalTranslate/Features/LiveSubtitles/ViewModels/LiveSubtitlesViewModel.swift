@@ -77,13 +77,6 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private var lastCommitAt: ContinuousClock.Instant?
     private var pendingCaption: PendingCaption?
     private var lastCommittedCaption = ""
-    /// planner 切走一段之后、这段的定稿译文回来之前的空窗。
-    ///
-    /// 切走的瞬间主行的源文本只剩 volatile，preview 会立刻把主行刷成一小截，
-    /// 一两百毫秒后定稿译文才到——用户看到的就是「内容凭空缩水又变回来」。
-    /// 这段时间里挡住会让主行显著变短的 preview。
-    private var awaitingCommitUntil: ContinuousClock.Instant?
-    private static let awaitingCommitWindow: Duration = .milliseconds(1_200)
     private var pendingFrontRow: String?
     private var frontRowTask: Task<Void, Never>?
     /// 上一行的合并窗口。一批整句在几百毫秒内落地，只显示最后一条。
@@ -417,18 +410,11 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             key: key,
             sourceText: window.sourceText
         )
-        awaitingCommitUntil = captionClock.now.advanced(
-            by: Self.awaitingCommitWindow
-        )
-        // 整句现在要接管主行，它不再是「事后补历史」的归档活。走归档队列时
-        // 说话期间完全不与 preview 竞争，实测定稿译文成批堆到静音才冲出来
-        // （相邻 segment 行号差为 2 的占一半），主行等不到它。
-        translationService.enqueueFinal(
+        translationService.enqueueArchive(
             key: key,
             window.sourceText,
             context: Array(subtitleHistory.suffix(1)),
-            sourceLanguage: sourceLanguage,
-            onPartial: { _, _ in }
+            sourceLanguage: sourceLanguage
         ) { [weak self] responseKey, translatedText in
             self?.handleStableCompletion(
                 key: responseKey,
@@ -500,26 +486,25 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         diagnostics.segmentCommitted(
             words: pending.sourceText
                 .split(whereSeparator: \Character.isWhitespace).count,
-            characters: resolved.count,
             lag: displayLag
         )
 
-        // 定稿的整句就是主行刚才那段话的最终版本，让它接管主行并定格一会儿，
-        // 用户才有机会把这句读完；随后主行让位给下一句的 preview，这一句降权
-        // 到上一行。这就是 re-translation 论文里「收到完整句子就完整显示」
-        // 的做法，也是同一篇论文把擦除量降二十倍的两个手段之一（另一个是
-        // biased beam search，我们用 prefill 硬约束实现了）。
-        //
-        // 判据是内容归属，不是 audioEnd 比大小。preview 的 range 含 volatile，
-        // 恒大于整句的 range，按 end 比较等于把整句永远关在门外——实测 36 次
-        // 里挡掉 36 次。主行正在显示的源文本以这个 window 的源文本开头，
-        // 就说明它是主行前半段的定稿，该由它接管。
-        let ownsCurrentRow = displayedTranslationSourceText.isEmpty
-            || displayedTranslationSourceText.hasPrefix(pending.sourceText)
-            || pending.sourceText.hasPrefix(displayedTranslationSourceText)
-        guard ownsCurrentRow else {
+        // 主行只在说话停下来时才让整句接管：讲话还在继续时，preview 已经跑到
+        // 更后面，把主行拉回刚说完的那句就是倒退。
+        let caughtUpToSpeech = latestRecognizedAudioEnd - key.audioRange.end
+            <= silenceFlushInterval + 0.2
+        guard caughtUpToSpeech else {
             diagnostics.commitBlocked(
-                reason: "notCurrentRow",
+                reason: "stillSpeaking",
+                windowEnd: key.audioRange.end,
+                displayedEnd: displayedAudioEnd
+            )
+            refreshLiveSource()
+            return
+        }
+        guard key.audioRange.end > displayedAudioEnd + 0.2 else {
+            diagnostics.commitBlocked(
+                reason: "behindDisplayed",
                 windowEnd: key.audioRange.end,
                 displayedEnd: displayedAudioEnd
             )
@@ -770,29 +755,12 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             return
         }
 
-        if !isCommitted, let deadline = awaitingCommitUntil {
-            if now < deadline,
-               !currentTranslatedText.isEmpty,
-               text.count * 5 < currentTranslatedText.count * 3 {
-                pendingCaption = PendingCaption(
-                    text: text,
-                    sourceText: sourceText,
-                    audioEnd: audioEnd
-                )
-                diagnostics.hold(cause: "awaitingCommit")
-                return
-            }
-            if now >= deadline { awaitingCommitUntil = nil }
-        }
-
         let elapsed = lastCaptionChangeAt.map { $0.duration(to: now) }
             ?? .seconds(3_600)
         switch LiveCaptionPresenter.update(
             displayed: currentTranslatedText,
             incoming: text,
-            sinceLastChange: elapsed,
-            // 定稿是这段话的最终形态，不受改写节流约束；内容没变时仍然不重绘。
-            minimumHold: isCommitted ? .zero : LiveCaptionPresenter.minimumHoldInterval
+            sinceLastChange: elapsed
         ) {
         case .hold:
             pendingCaption = PendingCaption(
@@ -804,26 +772,22 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             return
         case .append(let value):
             let common = currentTranslatedText.commonPrefix(with: value).count
-            let previousLength = currentTranslatedText.count
             currentTranslatedText = value
             diagnostics.caption(
                 kind: "append",
                 gapMS: milliseconds(elapsed),
                 length: value.count,
-                previousLength: previousLength,
                 commonPrefix: common,
                 isCommitted: isCommitted
             )
         case .replace(let value):
             let common = currentTranslatedText.commonPrefix(with: value).count
-            let previousLength = currentTranslatedText.count
             currentTranslatedText = value
             captionRewriteCount += 1
             diagnostics.caption(
                 kind: "replace",
                 gapMS: milliseconds(elapsed),
                 length: value.count,
-                previousLength: previousLength,
                 commonPrefix: common,
                 isCommitted: isCommitted
             )
@@ -833,10 +797,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         lastCaptionChangeAt = now
         // 上一行由 handleStableCompletion 在整句定稿时直接更新，不再等它
         // 能不能上主行。这里只记定格起点。
-        if isCommitted {
-            lastCommitAt = now
-            awaitingCommitUntil = nil
-        }
+        if isCommitted { lastCommitAt = now }
         currentOriginalText = sourceText
         displayedSourceText = sourceText
         displayedTranslationSourceText = sourceText
@@ -911,7 +872,6 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         frontRowTask?.cancel()
         frontRowTask = nil
         pendingFrontRow = nil
-        awaitingCommitUntil = nil
         displayedSourceText = ""
         pendingCaption = nil
         lastCaptionChangeAt = nil

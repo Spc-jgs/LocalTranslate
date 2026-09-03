@@ -54,7 +54,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private var captionChanges = 0
     private var rewrites = 0
     private var appends = 0
-    private var holdsByCause: [String: Int] = [:]
+    private var holdsByThrottle = 0
+    private var holdsByCommitHold = 0
     private var segments = 0
     private var changesPerSegment: [Int] = []
     private var anchorMoves = 0
@@ -65,11 +66,6 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private var commitBlocks: [String: Int] = [:]
     /// 每次改写时，新旧译文的公共前缀占新译文的比例。
     private var rewriteOverlaps: [Double] = []
-    /// 被擦掉重写的字数，与最终定稿的字数。两者之比是 re-translation 文献里的
-    /// normalized erasure——每产出一个字，屏幕上被擦掉重写了几个字。
-    /// 论文给的朴素基线是 2.11，加上偏置搜索与掩码后能降到二十分之一。
-    private var erasedCharacters = 0
-    private var emittedCharacters = 0
     private var lags: [Double] = []
     private var firstTokenMS: [Int] = []
 
@@ -121,13 +117,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                     + "max=\(perSegment.max() ?? 0)"
             )
             write(
-                "holds "
-                    + (holdsByCause.isEmpty
-                        ? "none"
-                        : holdsByCause
-                            .sorted { $0.value > $1.value }
-                            .map { "\($0.key)=\($0.value)" }
-                            .joined(separator: " "))
+                "holds throttle=\(holdsByThrottle) commitHold=\(holdsByCommitHold)"
             )
             write(
                 "previewAnchor held=\(anchorHolds) moved=\(anchorMoves) "
@@ -148,17 +138,6 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
             write(
                 "rewriteOverlap avg=\(average(rewriteOverlaps)) "
                     + "p90=\(percentile(rewriteOverlaps, 0.9))"
-            )
-            // 和 re-translation 论文的基线 2.11 对齐着看。
-            write(
-                "normalizedErasure="
-                    + (emittedCharacters > 0
-                        ? String(
-                            format: "%.2f",
-                            Double(erasedCharacters) / Double(emittedCharacters)
-                        )
-                        : "n/a")
-                    + " erased=\(erasedCharacters) emitted=\(emittedCharacters)"
             )
             write("displayLag avg=\(average(lags))s p90=\(percentile(lags, 0.9))s")
             write(
@@ -183,7 +162,6 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         kind: String,
         gapMS: Int,
         length: Int,
-        previousLength: Int,
         commonPrefix: Int,
         isCommitted: Bool
     ) {
@@ -199,7 +177,6 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                         Double(commonPrefix) / Double(length)
                     )
                 }
-                erasedCharacters += max(previousLength - commonPrefix, 0)
             } else {
                 appends += 1
             }
@@ -264,7 +241,11 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     func hold(cause: String) {
         queue.async { [self] in
             guard handle != nil else { return }
-            holdsByCause[cause, default: 0] += 1
+            if cause == "commitHold" {
+                holdsByCommitHold += 1
+            } else {
+                holdsByThrottle += 1
+            }
         }
     }
 
@@ -281,11 +262,10 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     }
 
     /// 一句话定稿。这一行回答「这句在屏幕上折腾了几次」。
-    func segmentCommitted(words: Int, characters: Int, lag: Double) {
+    func segmentCommitted(words: Int, lag: Double) {
         queue.async { [self] in
             guard handle != nil else { return }
             segments += 1
-            emittedCharacters += characters
             changesPerSegment.append(segmentChanges)
             lags.append(lag)
             write(
@@ -311,7 +291,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         captionChanges = 0
         rewrites = 0
         appends = 0
-        holdsByCause.removeAll()
+        holdsByThrottle = 0
+        holdsByCommitHold = 0
         segments = 0
         changesPerSegment.removeAll()
         anchorMoves = 0
@@ -321,8 +302,6 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         commitsAccepted = 0
         commitBlocks.removeAll()
         rewriteOverlaps.removeAll()
-        erasedCharacters = 0
-        emittedCharacters = 0
         lags.removeAll()
         firstTokenMS.removeAll()
         segmentChanges = 0
