@@ -16,6 +16,7 @@ final class MiniHUDViewModel: ObservableObject {
     private var copyFeedbackGeneration = 0
 
     func loadAndTranslate(_ text: String) {
+        SpeechReader.shared.stop()
         cancelTranslation()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         originalText = trimmed

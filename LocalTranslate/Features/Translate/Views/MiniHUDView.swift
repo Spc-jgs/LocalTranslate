@@ -209,6 +209,14 @@ struct MiniHUDView: View {
 
             Spacer()
 
+            // 气泡太窄，只放一个喇叭；原文在这里只显示两行，本来就是配角，
+            // 所以读的是译文——它的语言也无需判断。
+            SpeakButton(
+                text: viewModel.translatedText,
+                languageCode: AppSettings.targetLanguage.speechLanguageCode,
+                id: "hud.translation"
+            )
+
             // Retry Button
             Button {
                 viewModel.loadAndTranslate(viewModel.originalText)

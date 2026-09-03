@@ -55,6 +55,16 @@ final class MiniHUDPanel: NSPanel {
         false
     }
 
+
+    /// 窗口收起时停掉朗读。
+    ///
+    /// 覆盖 `orderOut` 而不是逐个补隐藏的调用点：Esc、失焦、快捷键、关闭按钮
+    /// 都会走到这里，漏一个就会出现「窗口没了还在说话」。
+    override func orderOut(_ sender: Any?) {
+        SpeechReader.shared.stop()
+        super.orderOut(sender)
+    }
+
     override func cancelOperation(_ sender: Any?) {
         orderOut(nil)
     }

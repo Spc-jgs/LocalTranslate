@@ -200,6 +200,12 @@ struct ContentView: View {
 
                 Spacer()
 
+                SpeakButton(
+                    text: viewModel.originalText,
+                    languageCode: sourceSpeechCode,
+                    id: "panel.original"
+                )
+
                 styleMenu
 
                 if !viewModel.originalText.isEmpty {
@@ -281,9 +287,32 @@ struct ContentView: View {
 
     // MARK: - Translation
 
+    /// 原文朗读用哪种语音。判不出来时 `SpeakButton` 自己不显示。
+    ///
+    /// 译文那边不需要这一步——它的语言就是用户设的目标语言。
+    private var sourceSpeechCode: String? {
+        TranslationLanguage
+            .speechLanguage(forSource: viewModel.originalText)?
+            .speechLanguageCode
+    }
+
     private var translationSection: some View {
         VStack(alignment: .leading, spacing: 7) {
-            sectionTitle("翻译", systemImage: "sparkles")
+            HStack {
+                sectionTitle("翻译", systemImage: "sparkles")
+
+                Spacer()
+
+                // 与 sectionTitle 同为 9pt：面板高度按固定 baseHeight 算，
+                // 标题行一旦长高就会挤掉底部。
+                SpeakButton(
+                    text: viewModel.translatedText,
+                    languageCode: AppSettings.targetLanguage
+                        .speechLanguageCode,
+                    id: "panel.translation",
+                    size: 9
+                )
+            }
 
             translationContent
                 .frame(maxWidth: .infinity, alignment: .topLeading)

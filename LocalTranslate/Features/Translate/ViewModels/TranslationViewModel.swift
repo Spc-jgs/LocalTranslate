@@ -98,6 +98,9 @@ import AppKit
 
         cancelTranslation()
 
+        // 旧译文的朗读不该盖在新译文上。
+        SpeechReader.shared.stop()
+
         translatedText = ""
 
         errorMessage = nil
