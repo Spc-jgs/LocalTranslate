@@ -57,6 +57,10 @@ run_suite "LiveSubtitlePipelineStateTests" \
   LocalTranslate/Features/LiveSubtitles/Models/LiveSubtitlePipelineModels.swift \
   Tests/LiveSubtitlePipelineStateTests.swift
 
+run_suite "LiveCaptionPresenterTests" \
+  LocalTranslate/Features/LiveSubtitles/Models/LiveCaptionPresenter.swift \
+  Tests/LiveCaptionPresenterTests.swift
+
 run_suite "TranslatePanelLayoutTests" \
   LocalTranslate/Core/UI/TextHeightMeasurer.swift \
   LocalTranslate/Core/UI/TranslatePanelLayout.swift \

@@ -282,22 +282,32 @@ public struct LiveSubtitlesView: View {
     }
 
     private var activeCaption: some View {
+        // 两行的角色全程固定：上面永远是译文，下面永远是原文。原来主行会在
+        // 「还没有译文时显示英文原文」和「有译文后显示中文」之间切换，同时下面
+        // 那行原文时有时无——语言和行数一起跳，眼睛每次都要重新找位置。
         VStack(spacing: 3) {
-            if shouldShowTranslation && !primaryCaptionText.isEmpty {
+            if shouldShowTranslation {
                 Text(primaryCaptionText)
                     .font(.system(size: viewModel.fontSize, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
+                    .lineLimit(2, reservesSpace: true)
                     .frame(maxWidth: LiveSubtitlesOverlayLayout.captionMaximumWidth)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
                     .background(
-                        Color.accentColor.opacity(0.14),
+                        Color.accentColor.opacity(primaryCaptionText.isEmpty ? 0 : 0.14),
                         in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                     )
                     .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
                     .shadow(color: .black.opacity(0.9), radius: 6, x: 0, y: 2)
+                    // 追加时 captionRewriteCount 不变，文字顺着长、不带动画；
+                    // 整行改写才递增它，这一次内容变化就走淡入。
+                    .contentTransition(.opacity)
+                    .animation(
+                        reduceMotion ? nil : .easeOut(duration: 0.18),
+                        value: viewModel.captionRewriteCount
+                    )
             }
 
             if shouldShowOriginal && shouldShowSourceLine {
@@ -305,7 +315,7 @@ public struct LiveSubtitlesView: View {
                     .font(.system(size: max(viewModel.fontSize * 0.56, 14), weight: .medium))
                     .foregroundColor(.white.opacity(0.68))
                     .multilineTextAlignment(.center)
-                    .lineLimit(1)
+                    .lineLimit(1, reservesSpace: true)
                     .truncationMode(.head)
                     .frame(maxWidth: LiveSubtitlesOverlayLayout.sourceLineMaximumWidth)
                     .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
@@ -415,10 +425,9 @@ public struct LiveSubtitlesView: View {
         if viewModel.displayMode == .originalOnly {
             return activeSourceDisplayText
         }
-        if !viewModel.currentTranslatedText.isEmpty {
-            return viewModel.currentTranslatedText
-        }
-        return activeSourceDisplayText
+        // 译文还没到就留空——用原文顶上会让这一行先是英文再变中文，
+        // 是「中英文来回跳」里最刺眼的一下。原文有下面那行专门负责。
+        return viewModel.currentTranslatedText
     }
 
     private var activeSourceDisplayText: String {
@@ -431,7 +440,6 @@ public struct LiveSubtitlesView: View {
     private var shouldShowSourceLine: Bool {
         viewModel.displayMode != .chineseOnly
             && viewModel.displayMode != .originalOnly
-            && !viewModel.currentTranslatedText.isEmpty
             && !activeSourceDisplayText.isEmpty
     }
 
