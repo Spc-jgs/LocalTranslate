@@ -2,6 +2,7 @@ import Foundation
 
 nonisolated struct UsageScanBudget: Sendable {
     let maximumBytes: Int64
+    let seconds: Double
     let deadline: ContinuousClock.Instant
 
     static func standard(
@@ -10,6 +11,19 @@ nonisolated struct UsageScanBudget: Sendable {
     ) -> UsageScanBudget {
         UsageScanBudget(
             maximumBytes: maximumBytes,
+            seconds: seconds,
+            deadline: .now.advanced(by: .milliseconds(Int64(seconds * 1_000)))
+        )
+    }
+
+    /// 重新起算截止时间。预算是给**读取**的，不是给排队和准备的：构造 budget
+    /// 到真正开始读之间还隔着串行队列调度、候选文件枚举和索引开库。这段时间
+    /// 一旦吃掉整个时限，这一轮就一个字节也读不进来，`parsedOffset` 原地不动，
+    /// 而 `catchUpPending` 仍是 true——分片补齐从此空转，索引永远停在半路。
+    func started() -> UsageScanBudget {
+        UsageScanBudget(
+            maximumBytes: maximumBytes,
+            seconds: seconds,
             deadline: .now.advanced(by: .milliseconds(Int64(seconds * 1_000)))
         )
     }
@@ -61,7 +75,7 @@ nonisolated final class UsageScanExecutor: @unchecked Sendable {
                     do {
                         try cancellation.check()
                         continuation.resume(
-                            returning: try operation(cancellation, budget)
+                            returning: try operation(cancellation, budget.started())
                         )
                     } catch {
                         continuation.resume(throwing: error)
