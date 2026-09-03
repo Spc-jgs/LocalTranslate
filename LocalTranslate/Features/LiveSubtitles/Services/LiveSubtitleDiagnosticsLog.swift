@@ -60,6 +60,12 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private var changesPerSegment: [Int] = []
     private var anchorMoves = 0
     private var anchorHolds = 0
+    private var plannerWindows = 0
+    private var plannerDrains = 0
+    private var commitsAccepted = 0
+    private var commitBlocks: [String: Int] = [:]
+    /// 每次改写时，新旧译文的公共前缀占新译文的比例。
+    private var rewriteOverlaps: [Double] = []
     private var lags: [Double] = []
     private var firstTokenMS: [Int] = []
 
@@ -117,6 +123,22 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                 "previewAnchor held=\(anchorHolds) moved=\(anchorMoves) "
                     + "stability=\(percent(anchorHolds, of: anchorHolds + anchorMoves))"
             )
+            write(
+                "planner drains=\(plannerDrains) windows=\(plannerWindows)"
+            )
+            write(
+                "commit accepted=\(commitsAccepted) blocked="
+                    + (commitBlocks.isEmpty
+                        ? "none"
+                        : commitBlocks
+                            .sorted { $0.value > $1.value }
+                            .map { "\($0.key):\($0.value)" }
+                            .joined(separator: ","))
+            )
+            write(
+                "rewriteOverlap avg=\(average(rewriteOverlaps)) "
+                    + "p90=\(percentile(rewriteOverlaps, 0.9))"
+            )
             write("displayLag avg=\(average(lags))s p90=\(percentile(lags, 0.9))s")
             write(
                 "firstToken avg=\(average(firstTokenMS.map(Double.init)))ms "
@@ -132,10 +154,15 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     // MARK: - 记录
 
     /// 字幕真正上屏。`kind` 是 append / replace。
+    ///
+    /// `commonPrefix` 是新旧译文的公共前缀字数。这是判断改写性质的关键：
+    /// 比例高说明模型只是在尾部扩展、前面略作调整，展示层还有得救；比例低
+    /// 说明每次都是从头重新翻译，那就只能从请求侧解决。
     func caption(
         kind: String,
         gapMS: Int,
         length: Int,
+        commonPrefix: Int,
         isCommitted: Bool
     ) {
         queue.async { [self] in
@@ -145,12 +172,67 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
             if kind == "replace" {
                 rewrites += 1
                 segmentRewrites += 1
+                if length > 0 {
+                    rewriteOverlaps.append(
+                        Double(commonPrefix) / Double(length)
+                    )
+                }
             } else {
                 appends += 1
             }
             write(
                 "caption kind=\(kind) gap=\(gapMS)ms len=\(length) "
-                    + "committed=\(isCommitted)"
+                    + "common=\(commonPrefix) committed=\(isCommitted)"
+            )
+        }
+    }
+
+    /// planner 这一轮切出了几个窗口，还剩多少词没切。
+    /// 「一句都没 commit」到底是切不出来还是切出来了被挡住，靠这一行区分。
+    func plannerDrain(force: Bool, windows: Int, pendingWords: Int) {
+        queue.async { [self] in
+            guard handle != nil else { return }
+            plannerDrains += 1
+            plannerWindows += windows
+            guard windows > 0 || force else { return }
+            write(
+                "planner drain force=\(force) windows=\(windows) "
+                    + "pending=\(pendingWords)"
+            )
+        }
+    }
+
+    /// 整句翻译回来了，但没能上字幕条。`reason` 指出卡在哪一道。
+    func commitBlocked(
+        reason: String,
+        windowEnd: Double,
+        displayedEnd: Double
+    ) {
+        queue.async { [self] in
+            guard handle != nil else { return }
+            commitBlocks[reason, default: 0] += 1
+            write(
+                "commit blocked reason=\(reason) "
+                    + String(
+                        format: "windowEnd=%.2f displayedEnd=%.2f",
+                        windowEnd,
+                        displayedEnd
+                    )
+            )
+        }
+    }
+
+    func commitAccepted(windowEnd: Double, displayedEnd: Double) {
+        queue.async { [self] in
+            guard handle != nil else { return }
+            commitsAccepted += 1
+            write(
+                "commit accepted "
+                    + String(
+                        format: "windowEnd=%.2f displayedEnd=%.2f",
+                        windowEnd,
+                        displayedEnd
+                    )
             )
         }
     }
@@ -168,11 +250,14 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     }
 
     /// preview 的取词起点是否和上一次相同。起点不停挪动，译文就只能整段重写。
-    func previewAnchor(held: Bool, words: Int) {
+    ///
+    /// `bounded` 表示这次是否因为超过上界而被截断——上一版只在截断时才记，
+    /// 于是占多数的未截断情况一条数据都没有。
+    func previewAnchor(held: Bool, words: Int, bounded: Bool) {
         queue.async { [self] in
             guard handle != nil else { return }
             if held { anchorHolds += 1 } else { anchorMoves += 1 }
-            write("anchor held=\(held) words=\(words)")
+            write("anchor held=\(held) words=\(words) bounded=\(bounded)")
         }
     }
 
@@ -212,6 +297,11 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         changesPerSegment.removeAll()
         anchorMoves = 0
         anchorHolds = 0
+        plannerWindows = 0
+        plannerDrains = 0
+        commitsAccepted = 0
+        commitBlocks.removeAll()
+        rewriteOverlaps.removeAll()
         lags.removeAll()
         firstTokenMS.removeAll()
         segmentChanges = 0

@@ -320,6 +320,12 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         windowPlanner.append(finalizedSpans: update.finalizedSpans)
 
         let stableWindows = windowPlanner.drain(force: false)
+        diagnostics.plannerDrain(
+            force: false,
+            windows: stableWindows.count,
+            pendingWords: windowPlanner.pendingSourceText
+                .split(whereSeparator: \Character.isWhitespace).count
+        )
         submitStableWindows(stableWindows)
         flushPendingCaption()
         refreshLagState()
@@ -339,6 +345,12 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                       self.sessionID == expectedSessionID,
                       self.isRunning else { return }
                 let windows = self.windowPlanner.drain(force: true)
+                self.diagnostics.plannerDrain(
+                    force: true,
+                    windows: windows.count,
+                    pendingWords: self.windowPlanner.pendingSourceText
+                        .split(whereSeparator: \Character.isWhitespace).count
+                )
                 self.submitStableWindows(windows)
                 self.flushPendingCaption()
                 self.translationService.setLiveActivity(false)
@@ -408,6 +420,11 @@ public final class LiveSubtitlesViewModel: ObservableObject,
               let pending = pendingStableWindows[key.segmentID],
               pending.key == key,
               !completedSegmentIDs.contains(key.segmentID) else {
+            diagnostics.commitBlocked(
+                reason: "identity",
+                windowEnd: key.audioRange.end,
+                displayedEnd: displayedAudioEnd
+            )
             traceStaleDrop(key)
             return
         }
@@ -437,8 +454,28 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         // 整句 commit 之后要上字幕条，否则用户从头到尾只看得到滑动窗口的半句。
         // 唯一的门槛是不能倒退：`displayedAudioEnd` 会被 preview 一起推进，
         // 所以 preview 已经跑到前面时，这句旧的整句自然就不上屏了。
-        guard key.audioRange.end > displayedAudioEnd + 0.2,
-              !resolved.isEmpty else { return }
+        guard !resolved.isEmpty else {
+            diagnostics.commitBlocked(
+                reason: "empty",
+                windowEnd: key.audioRange.end,
+                displayedEnd: displayedAudioEnd
+            )
+            return
+        }
+        // 这一道是「防倒退」，但 preview 会把 displayedAudioEnd 推到最新语音
+        // 位置，而整句的 range 必然更早——它是不是恒为假，看日志说话。
+        guard key.audioRange.end > displayedAudioEnd + 0.2 else {
+            diagnostics.commitBlocked(
+                reason: "behindDisplayed",
+                windowEnd: key.audioRange.end,
+                displayedEnd: displayedAudioEnd
+            )
+            return
+        }
+        diagnostics.commitAccepted(
+            windowEnd: key.audioRange.end,
+            displayedEnd: displayedAudioEnd
+        )
         presentTranslation(
             text: resolved,
             sourceText: pending.sourceText,
@@ -596,6 +633,13 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             .split(whereSeparator: \Character.isWhitespace)
             .map(String.init)
         guard words.count > maximumWords else {
+            diagnostics.previewAnchor(
+                held: latestLiveSourceText.hasPrefix(lastAnchorSourceText)
+                    && !lastAnchorSourceText.isEmpty,
+                words: words.count,
+                bounded: false
+            )
+            lastAnchorSourceText = latestLiveSourceText
             return (latestLiveSourceText, latestLiveSourceRange)
         }
 
@@ -609,7 +653,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         diagnostics.previewAnchor(
             held: anchored.hasPrefix(lastAnchorSourceText)
                 && !lastAnchorSourceText.isEmpty,
-            words: anchoredWordCount
+            words: anchoredWordCount,
+            bounded: true
         )
         lastAnchorSourceText = anchored
         let droppedWordCount = max(words.count - anchoredWordCount, 0)
@@ -684,20 +729,24 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             diagnostics.hold(cause: "throttle")
             return
         case .append(let value):
+            let common = currentTranslatedText.commonPrefix(with: value).count
             currentTranslatedText = value
             diagnostics.caption(
                 kind: "append",
                 gapMS: milliseconds(elapsed),
                 length: value.count,
+                commonPrefix: common,
                 isCommitted: isCommitted
             )
         case .replace(let value):
+            let common = currentTranslatedText.commonPrefix(with: value).count
             currentTranslatedText = value
             captionRewriteCount += 1
             diagnostics.caption(
                 kind: "replace",
                 gapMS: milliseconds(elapsed),
                 length: value.count,
+                commonPrefix: common,
                 isCommitted: isCommitted
             )
         }
