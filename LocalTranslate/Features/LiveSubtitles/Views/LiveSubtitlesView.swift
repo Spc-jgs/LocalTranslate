@@ -449,9 +449,14 @@ public struct LiveSubtitlesView: View {
     }
 
     private var activeSourceDisplayText: String {
-        let words = viewModel.currentOriginalText
+        // 双语时原文行必须和主行译文说的是同一句；只看原文时才跟着最新语音走。
+        let source = viewModel.displayMode == .originalOnly
+            || viewModel.displayedSourceText.isEmpty
+            ? viewModel.currentOriginalText
+            : viewModel.displayedSourceText
+        let words = source
             .split(whereSeparator: \Character.isWhitespace)
-        guard words.count > 20 else { return viewModel.currentOriginalText }
+        guard words.count > 20 else { return source }
         return words.suffix(20).joined(separator: " ")
     }
 

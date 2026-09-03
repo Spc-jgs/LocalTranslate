@@ -18,6 +18,13 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     @Published public var currentTranslatedText = ""
     /// 上一条整句译文，降权显示在当前句上面。只看一句话很难接上语境。
     @Published public private(set) var previousCaptionText = ""
+    /// 当前主行译文对应的那段原文。
+    ///
+    /// 原文行原先跟着 `currentOriginalText` 走，那是含 volatile 的最新语音，
+    /// 比译文跑得远——屏幕上会出现译文和原文对不上的两行（实测截图里主行是
+    /// 「我想这就是我要说的全部内容了」，原文行却是下一句的开头）。宁可原文
+    /// 也一起滞后，也不能让两行说的不是同一句。
+    @Published public private(set) var displayedSourceText = ""
     @Published public var subtitleHistory: [SubtitleItem] = []
     @Published public var showHistoryDrawer = false
     @Published public var errorMessage: String?
@@ -70,6 +77,10 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private var lastCommitAt: ContinuousClock.Instant?
     private var pendingCaption: PendingCaption?
     private var lastCommittedCaption = ""
+    private var pendingFrontRow: String?
+    private var frontRowTask: Task<Void, Never>?
+    /// 上一行的合并窗口。一批整句在几百毫秒内落地，只显示最后一条。
+    private static let frontRowCoalesceInterval: Duration = .milliseconds(400)
     /// 节奏诊断。默认关闭，开着才创建文件、才持有句柄。
     private let diagnostics = LiveSubtitleDiagnosticsLog.shared
     private var lastAnchorSourceText = ""
@@ -467,7 +478,10 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         // 抢主行。上一版把这一行绑在「能否上主行」上，而那道门槛几乎恒为假
         // （实测 65 次里挡掉 62 次），于是上一行三分半只换了三次，看着就是
         // 固定在那儿不动。
-        previousCaptionText = resolved
+        // 整句走的是归档队列，说话期间不与 preview 抢 Ollama，静音时才成批
+        // 冲出来——实测一批 2-5 条，逐条覆盖上一行就是「一下子走三四条」。
+        // 批量补齐时中间那几条早就不是「上一句」了，只有最后一条才是。
+        scheduleFrontRow(resolved)
         lastCommittedCaption = resolved
         diagnostics.segmentCommitted(
             words: pending.sourceText
@@ -785,12 +799,31 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         // 能不能上主行。这里只记定格起点。
         if isCommitted { lastCommitAt = now }
         currentOriginalText = sourceText
+        displayedSourceText = sourceText
         displayedTranslationSourceText = sourceText
         displayedAudioEnd = max(displayedAudioEnd, audioEnd)
         refreshLagState()
     }
 
     /// 重新评估上一次被压住的译文。讲话时每次识别回调都会走到这里。
+    /// 合并同一批整句对上一行的更新，只让最后一条落地。
+    private func scheduleFrontRow(_ text: String) {
+        pendingFrontRow = text
+        guard frontRowTask == nil else { return }
+        let expectedSessionID = sessionID
+        frontRowTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.frontRowCoalesceInterval)
+            guard let self,
+                  self.sessionID == expectedSessionID,
+                  self.isRunning else { return }
+            self.frontRowTask = nil
+            if let text = self.pendingFrontRow {
+                self.pendingFrontRow = nil
+                self.previousCaptionText = text
+            }
+        }
+    }
+
     private func flushPendingCaption() {
         guard let pending = pendingCaption else { return }
         pendingCaption = nil
@@ -836,6 +869,10 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         previousCaptionText = ""
         lastCommittedCaption = ""
         lastAnchorSourceText = ""
+        frontRowTask?.cancel()
+        frontRowTask = nil
+        pendingFrontRow = nil
+        displayedSourceText = ""
         pendingCaption = nil
         lastCaptionChangeAt = nil
         lastCommitAt = nil
