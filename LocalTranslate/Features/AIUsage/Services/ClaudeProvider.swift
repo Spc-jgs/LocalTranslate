@@ -53,7 +53,11 @@ struct ClaudeProvider: UsageProvider {
             statusMessage: messages.isEmpty ? nil : messages.joined(separator: "；") + "。",
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
-            activityAvailable: true
+            activityAvailable: true,
+            catchUp: UsageCatchUpProgress(
+                pending: local.catchUpPending,
+                progress: local.indexedProgress
+            )
         )
     }
 
@@ -76,7 +80,8 @@ struct ClaudeProvider: UsageProvider {
             statusMessage: status,
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
-            activityAvailable: true
+            activityAvailable: true,
+            catchUp: nil
         )
     }
 

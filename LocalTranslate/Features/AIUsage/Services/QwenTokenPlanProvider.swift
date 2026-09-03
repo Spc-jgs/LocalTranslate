@@ -59,7 +59,13 @@ struct QwenTokenPlanProvider: UsageProvider {
             statusMessage: status,
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
-            activityAvailable: true
+            activityAvailable: true,
+            catchUp: activity.map {
+                UsageCatchUpProgress(
+                    pending: $0.catchUpPending,
+                    progress: $0.indexedProgress
+                )
+            }
         )
     }
 

@@ -31,6 +31,7 @@ nonisolated struct CodexProvider: UsageProvider {
                 dailyActivity: [],
                 modelActivity: [],
                 indexedFiles: 0,
+                indexedProgress: 0,
                 catchUpPending: false
             )
             activityError = error.localizedDescription
@@ -156,7 +157,11 @@ nonisolated struct CodexProvider: UsageProvider {
             statusMessage: combinedStatus.isEmpty ? nil : combinedStatus,
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: !windows.isEmpty,
-            activityAvailable: activityError == nil || !serverDaily.isEmpty
+            activityAvailable: activityError == nil || !serverDaily.isEmpty,
+            catchUp: UsageCatchUpProgress(
+                pending: localUsage.catchUpPending,
+                progress: localUsage.indexedProgress
+            )
         )
     }
 

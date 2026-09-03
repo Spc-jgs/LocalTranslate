@@ -12,13 +12,15 @@ struct AIUsageProviderFixtureTests {
         try await grokCurrentFormatPreservesModelEvidence()
         try await grokEvidenceDoesNotHideCompletedReferenceCost()
         try await agyDatabaseCacheHitAndChangeRebuild()
+        try await agyTurnIsDatedByItsOwnStepRow()
+        try await agyUnreadableDatabaseDoesNotPinCatchUp()
         try await agyWALHeaderWithoutSidecarsOpensImmutable()
         try await claudeUsageIsIncremental()
         try await qwenUsageSummaryIsIncremental()
         codexServerDailyOverridesOverlappingLocalHistory()
         referencePriceCatalogMatchesPublishedRates()
         try await corruptIndexIsQuarantinedAndRebuilt()
-        print("AIUsageProviderFixtureTests: 14 passed")
+        print("AIUsageProviderFixtureTests: 16 passed")
     }
 
     private static func codexUnchangedAndAppendAreIncremental() async throws {
@@ -394,6 +396,167 @@ struct AIUsageProviderFixtureTests {
         }
     }
 
+    /// `gen_metadata.idx` 与 `steps.idx` 各自独立递增：一次生成会连带用户消息与
+    /// 工具调用一起推进 `steps`。按同号取时间，会把今天的用量记到会话开始那天——
+    /// 一个跨天续聊的会话里，这足以让当天新出现的模型整个从「今天」消失。
+    private static func agyTurnIsDatedByItsOwnStepRow() async throws {
+        try await withFixture { root, databaseURL in
+            let conversations = root
+                .appendingPathComponent("antigravity/conversations", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: conversations,
+                withIntermediateDirectories: true
+            )
+            let source = conversations.appendingPathComponent("resumed.db")
+            var database: OpaquePointer?
+            expect(
+                sqlite3_open(source.path, &database) == SQLITE_OK,
+                "AGY resumed fixture open failed"
+            )
+            defer { sqlite3_close_v2(database) }
+            expect(
+                sqlite3_exec(
+                    database,
+                    """
+                    CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);
+                    CREATE TABLE steps(idx INTEGER PRIMARY KEY, metadata BLOB);
+                    """,
+                    nil,
+                    nil,
+                    nil
+                ) == SQLITE_OK,
+                "AGY resumed fixture setup failed"
+            )
+
+            let now = Int64(Date().timeIntervalSince1970)
+            let threeDaysAgo = now - 3 * 86_400
+
+            // 三天前的一次生成：gen 0 -> step 0。
+            expect(
+                insertAGYTurn(
+                    database,
+                    idx: 0,
+                    stepIndex: 0,
+                    model: "gemini-3.1-pro",
+                    input: 100,
+                    cacheRead: 0,
+                    output: 0,
+                    reasoning: 0,
+                    timestamp: threeDaysAgo
+                ),
+                "AGY archived turn setup failed"
+            )
+            // 同一天里还产生了两行非生成步骤，把 steps 推到 2。
+            expect(
+                insertAGYStepTime(database, idx: 1, timestamp: threeDaysAgo),
+                "AGY filler step setup failed"
+            )
+            expect(
+                insertAGYStepTime(database, idx: 2, timestamp: threeDaysAgo),
+                "AGY filler step setup failed"
+            )
+            // 今天续聊：gen 1 -> step 3。同号取时间会落到 step 1，也就是三天前。
+            expect(
+                insertAGYTurn(
+                    database,
+                    idx: 1,
+                    stepIndex: 3,
+                    model: "gemini-3.8-flash",
+                    input: 40,
+                    cacheRead: 0,
+                    output: 20,
+                    reasoning: 0,
+                    timestamp: now
+                ),
+                "AGY resumed turn setup failed"
+            )
+
+            let snapshot = try await UsageActivityIndexer.shared.scanAGY(
+                providerID: "agy-resumed-fixture",
+                geminiDirectory: root,
+                databaseURL: databaseURL
+            )
+            expect(
+                todayTokens(snapshot) == 60,
+                "跨天续聊的用量没有按自己的 steps 行归日"
+            )
+            let resumed = snapshot.modelActivity.first {
+                $0.period == .today && $0.modelID == "gemini-3.8-flash"
+            }
+            expect(
+                resumed?.usage.totalTokens == 60,
+                "今天新出现的模型没有出现在今天的用量里"
+            )
+            let archived = snapshot.modelActivity.first {
+                $0.period == .today && $0.modelID == "gemini-3.1-pro"
+            }
+            expect(archived == nil, "三天前的用量被记到了今天")
+        }
+    }
+
+    /// 一个读不出内容的 .db（0 字节、或还没建表）不能算「还没读完」。
+    /// 算 partial 会让它每轮重试，并把 provider 的 catchUpPending 永久钉在
+    /// true——`pruneMissingFiles` 从此不再运行，用量页也一直挂着补齐提示。
+    private static func agyUnreadableDatabaseDoesNotPinCatchUp() async throws {
+        try await withFixture { root, databaseURL in
+            let conversations = root
+                .appendingPathComponent("antigravity/conversations", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: conversations,
+                withIntermediateDirectories: true
+            )
+            FileManager.default.createFile(
+                atPath: conversations.appendingPathComponent("empty.db").path,
+                contents: Data()
+            )
+
+            let source = conversations.appendingPathComponent("real.db")
+            var database: OpaquePointer?
+            expect(
+                sqlite3_open(source.path, &database) == SQLITE_OK,
+                "AGY catch-up fixture open failed"
+            )
+            defer { sqlite3_close_v2(database) }
+            expect(
+                sqlite3_exec(
+                    database,
+                    """
+                    CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB);
+                    CREATE TABLE steps(idx INTEGER PRIMARY KEY, metadata BLOB);
+                    """,
+                    nil,
+                    nil,
+                    nil
+                ) == SQLITE_OK,
+                "AGY catch-up fixture setup failed"
+            )
+            expect(
+                insertAGYTurn(
+                    database,
+                    idx: 0,
+                    model: "gemini-3.1-pro",
+                    input: 10,
+                    cacheRead: 0,
+                    output: 5,
+                    reasoning: 0,
+                    timestamp: Int64(Date().timeIntervalSince1970)
+                ),
+                "AGY catch-up turn setup failed"
+            )
+
+            let snapshot = try await UsageActivityIndexer.shared.scanAGY(
+                providerID: "agy-empty-fixture",
+                geminiDirectory: root,
+                databaseURL: databaseURL
+            )
+            expect(todayTokens(snapshot) == 15, "空 .db 影响了同目录里可读库的用量")
+            expect(
+                !snapshot.catchUpPending,
+                "读不出内容的 .db 把 catchUpPending 永久钉住了"
+            )
+        }
+    }
+
     private static func agyWALHeaderWithoutSidecarsOpensImmutable() async throws {
         try await withFixture { root, databaseURL in
             let conversations = root
@@ -700,6 +863,7 @@ struct AIUsageProviderFixtureTests {
     private static func insertAGYTurn(
         _ database: OpaquePointer?,
         idx: Int,
+        stepIndex: Int? = nil,
         model: String,
         input: Int64,
         cacheRead: Int64,
@@ -707,8 +871,10 @@ struct AIUsageProviderFixtureTests {
         reasoning: Int64,
         timestamp: Int64
     ) -> Bool {
+        let stepIndex = stepIndex ?? idx
         let payload = agyRecordedUsagePayload(
             idx: idx,
+            stepIndex: stepIndex,
             model: model,
             input: input,
             cacheRead: cacheRead,
@@ -724,8 +890,8 @@ struct AIUsageProviderFixtureTests {
             nil
         ) == SQLITE_OK else { return false }
 
-        // 事件时间在 steps 表，与 gen_metadata 按 idx 一一对应。
-        return insertAGYStepTime(database, idx: idx, timestamp: timestamp)
+        // 事件时间在 steps 表，由本次生成自报的 last_step_index 指向。
+        return insertAGYStepTime(database, idx: stepIndex, timestamp: timestamp)
     }
 
     /// steps.metadata 的 protobuf 路径 1.1 是事件时间（Unix 秒）。
@@ -768,6 +934,7 @@ struct AIUsageProviderFixtureTests {
     /// 生成与 AGY `gen_metadata.data` 相同字段布局的最小 protobuf fixture。
     private static func agyRecordedUsagePayload(
         idx: Int,
+        stepIndex: Int,
         model: String,
         input: Int64,
         cacheRead: Int64,
@@ -781,9 +948,14 @@ struct AIUsageProviderFixtureTests {
         usage.append(protoCounter(field: 10, value: reasoning))
         usage.append(protoString(field: 11, value: "response-\(idx)"))
 
+        var lastStepIndex = Data()
+        lastStepIndex.append(protoString(field: 1, value: "last_step_index"))
+        lastStepIndex.append(protoString(field: 2, value: String(stepIndex)))
+
         var chat = Data()
         chat.append(protoMessage(field: 4, payload: usage))
         chat.append(protoString(field: 19, value: model))
+        chat.append(protoMessage(field: 20, payload: lastStepIndex))
         chat.append(protoString(field: 21, value: model))
         return protoMessage(field: 1, payload: chat)
     }

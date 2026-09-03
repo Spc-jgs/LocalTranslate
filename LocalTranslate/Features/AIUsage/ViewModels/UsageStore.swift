@@ -28,6 +28,10 @@ final class UsageStore: ObservableObject {
     private var providerRefreshTasks: [String: Task<Void, Never>] = [:]
     private var providerRefreshGenerations: [String: UUID] = [:]
 
+    // 分片补齐：还欠一片的 Provider，以及它上一片的推进标尺。
+    private var pendingCatchUp: Set<String> = []
+    private var catchUpProgress: [String: Int64] = [:]
+
     // 账号来源由用户配置决定，不再写死在这里。
     private let settingsStore: UsageProviderSettingsStore
     private var providers: [any UsageProvider]
@@ -61,6 +65,8 @@ final class UsageStore: ObservableObject {
         providerRefreshTasks.removeAll()
         providerRefreshGenerations.removeAll()
         refreshingProviderIDs.removeAll()
+        pendingCatchUp.removeAll()
+        catchUpProgress.removeAll()
 
         providers = settingsStore.makeProviders()
 
@@ -105,6 +111,8 @@ final class UsageStore: ObservableObject {
         providerRefreshTasks.removeAll()
         providerRefreshGenerations.removeAll()
         refreshingProviderIDs.removeAll()
+        pendingCatchUp.removeAll()
+        catchUpProgress.removeAll()
     }
 
     func refresh() async {
@@ -200,7 +208,8 @@ final class UsageStore: ObservableObject {
             statusMessage: snapshot.statusMessage,
             schemaVersion: snapshot.schemaVersion,
             quotaAvailable: snapshot.quotaAvailable,
-            activityAvailable: snapshot.activityAvailable
+            activityAvailable: snapshot.activityAvailable,
+            catchUp: snapshot.catchUp
         )
         nextAccounts.removeAll { $0.id == snapshot.id }
         nextAccounts.append(merged)
@@ -211,6 +220,31 @@ final class UsageStore: ObservableObject {
         recomputeDashboard()
 
         UsageDiskCache.shared.save(accounts)
+        noteCatchUp(merged.catchUp, for: providerID)
+    }
+
+    /// 一轮扫描被预算截断后，决定要不要立刻扫下一片。
+    ///
+    /// 不这么做的话 `catchUpPending` 就只是一句 UI 文案：单片预算 32 MB，
+    /// 而唯一的推进器是 15 分钟醒一次、只刷新超过 30 分钟快照的 `refreshLoop`，
+    /// 实际推进速率是 32 MB / 30 分钟。本机 1.5 GB 的 Codex 日志要靠这个补齐
+    /// 需要页面常开约一天，用量数字在那之前一直偏低且看不出偏低。
+    ///
+    /// 单片预算不放宽——重活仍然带预算、带取消路径，改的只是「什么时候扫下一片」。
+    private func noteCatchUp(_ catchUp: UsageCatchUpProgress?, for providerID: String) {
+        guard let catchUp, catchUp.pending else {
+            catchUpProgress.removeValue(forKey: providerID)
+            pendingCatchUp.remove(providerID)
+            return
+        }
+        // 进度不动就停：卡住的来源（读不出的文件、反复失败的目录）不该让
+        // 这条链空转，等下一轮常规刷新再试。
+        guard catchUpProgress[providerID] != catchUp.progress else {
+            pendingCatchUp.remove(providerID)
+            return
+        }
+        catchUpProgress[providerID] = catchUp.progress
+        pendingCatchUp.insert(providerID)
     }
 
     private func publish(error: Error, for providerID: String) {
@@ -225,6 +259,15 @@ final class UsageStore: ObservableObject {
         providerRefreshTasks.removeValue(forKey: providerID)
         providerRefreshGenerations.removeValue(forKey: providerID)
         refreshingProviderIDs.remove(providerID)
+
+        guard pendingCatchUp.remove(providerID) != nil,
+              refreshLoop != nil,
+              let provider = providers.first(where: { $0.providerID == providerID })
+        else { return }
+
+        // 页面还开着才继续。`stop()` 清掉 refreshLoop 并取消在途任务，
+        // 这条链随之断开，空闲态不留下任何常驻物。
+        scheduleRefresh(for: provider)
     }
 
     func setHistoryRange(_ range: UsageHistoryRange) {

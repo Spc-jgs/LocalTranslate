@@ -4,6 +4,8 @@ nonisolated struct AGYRecordedUsage: Sendable, Equatable {
     let modelID: String?
     let modelLabel: String?
     let responseID: String?
+    /// 这次生成在 `steps` 表里的行号；事件时间只能从这一行取。
+    let lastStepIndex: Int64?
     let usage: TokenBreakdown
 }
 
@@ -11,7 +13,9 @@ nonisolated struct AGYRecordedUsage: Sendable, Equatable {
 ///
 /// 职责边界：这里只负责「一段 blob 里有什么」。事件时间不在 `gen_metadata`
 /// 里——实测 1451 行样本中该表没有任何精度的事件时间戳；时间由 `steps.metadata`
-/// 提供，两表以 `idx` 一一对应，关联由 indexer 在 SQL 层完成。
+/// 提供，而两表的 `idx` **各自独立递增**：`gen_metadata` 每次模型生成加一，
+/// `steps` 连用户消息与工具调用一起加一。跨表关联只能走本记录里的
+/// `last_step_index`，关联由 indexer 完成。
 nonisolated enum AGYUsageProtoParser {
     private enum ParseError: Error {
         case malformed
@@ -30,6 +34,7 @@ nonisolated enum AGYUsageProtoParser {
         var usage: ParsedUsage?
         var modelID: String?
         var modelLabel: String?
+        var lastStepIndex: Int64?
     }
 
     private struct Field {
@@ -153,6 +158,7 @@ nonisolated enum AGYUsageProtoParser {
                 modelID: turn.modelID,
                 modelLabel: turn.modelLabel,
                 responseID: rawUsage.responseID,
+                lastStepIndex: turn.lastStepIndex,
                 usage: TokenBreakdown(
                     inputTokens: input,
                     outputTokens: output,
@@ -177,12 +183,33 @@ nonisolated enum AGYUsageProtoParser {
                 turn.usage = usage
             case 19:
                 turn.modelID = try field.string()
+            case 20:
+                if let index = try parseStepIndex(field.message()) {
+                    turn.lastStepIndex = index
+                }
             case 21:
                 turn.modelLabel = try field.string()
             default:
                 break
             }
         }
+    }
+
+    /// `chat.20` 是一组 key/value 字符串对，其中 `last_step_index` 指出这次生成
+    /// 落在 `steps` 表的哪一行。没有它就无法给这条用量定时间——`gen_metadata.idx`
+    /// 与 `steps.idx` 不同步，直接相等会把 Token 记到别的日子。
+    private static func parseStepIndex(_ bytes: ArraySlice<UInt8>) throws -> Int64? {
+        var key: String?
+        var value: String?
+        try visit(bytes) { field in
+            switch field.number {
+            case 1: key = try field.string()
+            case 2: value = try field.string()
+            default: break
+            }
+        }
+        guard key == "last_step_index", let value else { return nil }
+        return Int64(value)
     }
 
     private static func parseUsage(

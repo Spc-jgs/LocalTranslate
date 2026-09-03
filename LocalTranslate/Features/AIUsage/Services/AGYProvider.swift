@@ -108,7 +108,11 @@ struct AGYProvider: UsageProvider {
             statusMessage: status,
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: quotaValue != nil,
-            activityAvailable: activityAvailable
+            activityAvailable: activityAvailable,
+            catchUp: UsageCatchUpProgress(
+                pending: activityValue.catchUpPending,
+                progress: activityValue.indexedProgress
+            )
         )
     }
 
@@ -135,6 +139,7 @@ struct AGYProvider: UsageProvider {
         dailyActivity: [],
         modelActivity: [],
         indexedFiles: 0,
+        indexedProgress: 0,
         catchUpPending: false
     )
 

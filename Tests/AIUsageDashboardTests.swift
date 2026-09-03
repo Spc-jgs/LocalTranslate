@@ -31,7 +31,8 @@ struct AIUsageDashboardTests {
             statusMessage: "",
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
-            activityAvailable: true
+            activityAvailable: true,
+            catchUp: nil
         )
 
         expect(modelTotal(account, range: .sevenDays) == 70, "7-day model total used another range")

@@ -193,9 +193,17 @@ private nonisolated func scanJSONLLines(
     defer { try? handle.close() }
     try handle.seek(toOffset: UInt64(max(0, startOffset)))
 
-    var buffer = Data()
+    // 一行读不完，`bufferStartOffset` 就不动，这一轮的 `safeOffset` 等于起点，
+    // 下一轮从同一处重来。所以这个函数的两条不变量都是「必须能往前走」：
+    // 找换行符只扫新读进来的部分（每次从头扫是 O(n²)，实测 Codex 日志里一个
+    // 7.85 MB 的工具输出行就能把整轮预算耗在字节比较上），以及一行大到超过
+    // 整轮字节预算时放弃它而不是原地打转。
+    var buffer: [UInt8] = []
+    var searched = 0
     var bufferStartOffset = startOffset
     var reachedEOF = false
+    var skippingOversizedLine = false
+    let oversizedLineLimit = meter.budget.maximumBytes
 
     while !meter.isExhausted {
         try meter.check()
@@ -207,24 +215,49 @@ private nonisolated func scanJSONLLines(
             reachedEOF = true
             break
         }
-
-        buffer.append(chunk)
         try meter.record(bytes: chunk.count)
 
-        while let newline = buffer.firstIndex(of: 0x0A) {
+        if skippingOversizedLine {
+            guard let newline = chunk.firstIndex(of: 0x0A) else {
+                // 整块都还在这一行里；offset 跟着读取位置走，下一轮才不会重来。
+                bufferStartOffset += Int64(chunk.count)
+                continue
+            }
+            let consumed = chunk.distance(from: chunk.startIndex, to: newline) + 1
+            bufferStartOffset += Int64(consumed)
+            buffer = Array(chunk.dropFirst(consumed))
+            searched = 0
+            skippingOversizedLine = false
+        } else {
+            buffer.append(contentsOf: chunk)
+        }
+
+        while let newline = buffer[searched...].firstIndex(of: 0x0A) {
             try meter.check()
             let lineEndOffset = bufferStartOffset + Int64(newline) + 1
-            if newline > buffer.startIndex {
+            if newline > 0 {
                 try consume(Data(buffer[..<newline]), lineEndOffset)
             }
-            buffer.removeSubrange(...newline)
+            buffer.removeFirst(newline + 1)
+            searched = 0
             bufferStartOffset = lineEndOffset
+        }
+        searched = buffer.count
+
+        // 这一行在任何一轮里都读不完（整轮预算就这么多），留着只会让扫描
+        // 永远停在它前面。超长行是工具输出，不是 `token_count` 记录，
+        // 丢掉它不影响用量数字。
+        if Int64(buffer.count) > oversizedLineLimit {
+            bufferStartOffset += Int64(buffer.count)
+            buffer.removeAll(keepingCapacity: false)
+            searched = 0
+            skippingOversizedLine = true
         }
     }
 
     return JSONLScanResult(
         safeOffset: bufferStartOffset,
-        reachedEOF: reachedEOF && buffer.isEmpty
+        reachedEOF: reachedEOF && buffer.isEmpty && !skippingOversizedLine
     )
 }
 
@@ -1248,7 +1281,7 @@ private nonisolated func agyProgressCallback(
 }
 
 private nonisolated struct AGYIncrementalIndexer {
-    static let parserVersion = 5
+    static let parserVersion = 6
     static let rowsPerDatabase = 10_000
     static let totalRowLimit = 50_000
 
@@ -1416,7 +1449,11 @@ private nonisolated struct AGYIncrementalIndexer {
         }
         guard openResult == SQLITE_OK, let database else {
             if let database { sqlite3_close_v2(database) }
-            return ([], afterRowID, false)
+            // 打不开不是「还没读完」。当成 partial 会让这个文件每轮重试、
+            // 并把 provider 的 catchUpPending 永久钉在 true——实测一个 0 字节
+            // 的 .db 就能让「分片补齐」提示挂上好几天。文件真变了，
+            // `unchanged()` 比对 inode/大小/mtime 时自然会重扫。
+            return ([], afterRowID, true)
         }
         defer { sqlite3_close_v2(database) }
 
@@ -1461,14 +1498,17 @@ private nonisolated struct AGYIncrementalIndexer {
         return sqlite3_step(statement) == SQLITE_ROW
     }
 
-    /// `gen_metadata` 存 Token，`steps` 存事件时间，两表以 `idx` 一一对应。
+    /// `gen_metadata` 存 Token，`steps` 存事件时间，两表由 `last_step_index` 关联。
+    ///
+    /// 不对 `steps` 设行数上限：它的行号和 `gen_metadata` 不同步——一次生成会
+    /// 连带用户消息与工具调用一起推进 `steps.idx`，实测约 2 倍——按 Token 行数
+    /// 截断会把窗口末尾几次生成的时间读丢。读取量由 `meter` 的字节预算兜底。
     ///
     /// 只取 blob 前 64 字节：时间在 protobuf 路径 1.1，实测 1451 行样本中前 32
     /// 字节即可全部解出，因此这次关联的读取量相对 `gen_metadata` 可以忽略。
     private func loadStepTimestamps(
         _ database: OpaquePointer,
         afterRowID: Int64,
-        maximumRows: Int,
         meter: inout UsageScanMeter
     ) throws -> [Int64: Date] {
         let sql =
@@ -1477,14 +1517,12 @@ private nonisolated struct AGYIncrementalIndexer {
             FROM steps
             WHERE idx > ? AND metadata IS NOT NULL
             ORDER BY idx
-            LIMIT ?
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else { return [:] }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, afterRowID)
-        sqlite3_bind_int(statement, 2, Int32(maximumRows + 1))
 
         var timestamps: [Int64: Date] = [:]
         while true {
@@ -1518,7 +1556,6 @@ private nonisolated struct AGYIncrementalIndexer {
         let stepTimestamps = try loadStepTimestamps(
             database,
             afterRowID: afterRowID,
-            maximumRows: maximumRows,
             meter: &meter
         )
         let sql =
@@ -1532,7 +1569,8 @@ private nonisolated struct AGYIncrementalIndexer {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            return ([], afterRowID, false)
+            // 没有可读的表 == 这个文件读完了，同上：不能记成 partial。
+            return ([], afterRowID, true)
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, afterRowID)
@@ -1574,7 +1612,9 @@ private nonisolated struct AGYIncrementalIndexer {
             let usage: TokenBreakdown
             let turns: Int
             let eventKey: String
-            if let recordedAt = stepTimestamps[rowID] {
+            // 这次生成的时间在它自己指名的那行 steps 上；`last_step_index`
+            // 缺失时才退回同号行，那是旧库的兼容路径。
+            if let recordedAt = stepTimestamps[record.lastStepIndex ?? rowID] {
                 occurredAt = recordedAt
                 usage = record.usage
                 turns = record.usage.totalTokens > 0 ? 1 : 0
@@ -1626,7 +1666,8 @@ private nonisolated struct AGYIncrementalIndexer {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            return ([], afterRowID, false)
+            // 同上：既没有 gen_metadata 也没有 steps，就是没有可读内容。
+            return ([], afterRowID, true)
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, afterRowID)

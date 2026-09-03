@@ -122,8 +122,16 @@ nonisolated struct ModelActivity: Identifiable, Codable, Sendable {
     var id: String { "\(period.rawValue)::\(modelID)" }
 }
 
+/// 索引分片补齐的状态。`pending` 说明这一轮扫描被预算截断、历史还没读完；
+/// 数字因此是偏低的，不是真值。`progress` 是推进标尺，两轮之间不变就说明
+/// 补不动了——续扫只会空转，该退回常规节奏。
+nonisolated struct UsageCatchUpProgress: Codable, Sendable, Equatable {
+    let pending: Bool
+    let progress: Int64
+}
+
 nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 7
 
     let id: String
     let sortOrder: Int
@@ -143,6 +151,8 @@ nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {
     let schemaVersion: Int?
     let quotaAvailable: Bool?
     let activityAvailable: Bool?
+    /// 只有走本机索引的 Provider 会填；纯 API 来源没有分片补齐这回事。
+    let catchUp: UsageCatchUpProgress?
 
     func activity(for period: ActivityPeriod) -> PeriodActivity? {
         activity.first { $0.period == period }

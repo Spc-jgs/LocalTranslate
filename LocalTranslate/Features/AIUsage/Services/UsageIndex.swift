@@ -68,6 +68,9 @@ nonisolated struct IndexedActivitySnapshot: Sendable {
     let dailyActivity: [DailyActivity]
     let modelActivity: [ModelActivity]
     let indexedFiles: Int
+    /// 已解析字节（AGY 是已读行号）的总和。这是分片补齐的推进标尺：
+    /// 两轮之间它不变，就说明这一片什么也没读进来，续扫只会空转。
+    let indexedProgress: Int64
     let catchUpPending: Bool
 }
 
@@ -348,20 +351,28 @@ nonisolated final class UsageIndex {
         )
 
         let countStatement = try prepare(
-            "SELECT COUNT(*) FROM source_file WHERE provider_id = ? AND account_id = ?"
+            """
+            SELECT COUNT(*), COALESCE(SUM(parsed_offset), 0)
+            FROM source_file
+            WHERE provider_id = ? AND account_id = ?
+            """
         )
         defer { sqlite3_finalize(countStatement) }
         try bind(providerID, to: 1, in: countStatement)
         try bind(accountID, to: 2, in: countStatement)
-        let count = sqlite3_step(countStatement) == SQLITE_ROW
-            ? Int(sqlite3_column_int(countStatement, 0))
-            : 0
+        var count = 0
+        var progress: Int64 = 0
+        if sqlite3_step(countStatement) == SQLITE_ROW {
+            count = Int(sqlite3_column_int(countStatement, 0))
+            progress = sqlite3_column_int64(countStatement, 1)
+        }
 
         return IndexedActivitySnapshot(
             periodActivity: periods,
             dailyActivity: daily,
             modelActivity: models,
             indexedFiles: count,
+            indexedProgress: progress,
             catchUpPending: catchUpPending
         )
     }

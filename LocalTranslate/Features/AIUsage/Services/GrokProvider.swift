@@ -44,7 +44,11 @@ struct GrokProvider: UsageProvider {
             statusMessage: combinedStatus.isEmpty ? nil : combinedStatus,
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: remoteOutcome.snapshot != nil,
-            activityAvailable: true
+            activityAvailable: true,
+            catchUp: UsageCatchUpProgress(
+                pending: localSnapshot.catchUpPending,
+                progress: localSnapshot.indexedProgress
+            )
         )
     }
 
