@@ -440,6 +440,10 @@ public final class LiveTranslationService {
             }
 
             if chunk.done == true {
+                recordFirstToken(
+                    requestStartedAt: requestStartedAt,
+                    firstTokenAt: firstTokenAt
+                )
                 traceMetrics(
                     key: key,
                     requestStartedAt: requestStartedAt,
@@ -520,6 +524,18 @@ public final class LiveTranslationService {
                 + "audio=\(key.audioRange.start)-\(key.audioRange.end)"
         )
         #endif
+    }
+
+    private func recordFirstToken(
+        requestStartedAt: Date,
+        firstTokenAt: Date?
+    ) {
+        guard let firstTokenAt else { return }
+        LiveSubtitleDiagnosticsLog.shared.translationMetrics(
+            firstTokenMS: Int(
+                firstTokenAt.timeIntervalSince(requestStartedAt) * 1_000
+            )
+        )
     }
 
     private func traceMetrics(

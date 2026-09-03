@@ -21,6 +21,7 @@ nonisolated enum AppSettings {
         static let liveSourceLanguage = "liveSubtitlesSourceLanguage"
         static let liveDisplayMode = "liveSubtitlesDisplayMode"
         static let liveFontSize = "liveSubtitlesFontSize"
+        static let liveDiagnosticsLog = "liveSubtitlesDiagnosticsLog"
 
         // MARK: AI Usage
 
@@ -95,4 +96,15 @@ nonisolated enum AppSettings {
     }
     static let liveFontSizeRange: ClosedRange<CGFloat> = 16...34
     static let liveFontSizeStep: CGFloat = 2
+
+    /// 是否把实时字幕的节奏诊断写到磁盘。
+    ///
+    /// 默认关闭：实时字幕的基线之一就是「不写盘」，不能因为想看数据就让所有人
+    /// 一直付这个代价。要调字幕节奏时打开，跑一段访谈，再关掉。
+    static var liveDiagnosticsLogEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.liveDiagnosticsLog) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.liveDiagnosticsLog)
+        }
+    }
 }

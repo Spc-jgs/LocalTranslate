@@ -76,6 +76,9 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.keepAlive)
     private var keepAlive = AppSettings.defaultKeepAlive
 
+    @AppStorage(AppSettings.Key.liveDiagnosticsLog)
+    private var diagnosticsLogEnabled = false
+
     @AppStorage(AppSettings.Key.translationStyle)
     private var translationStyleRaw = AppSettings.defaultTranslationStyleRaw
 
@@ -295,6 +298,24 @@ struct SettingsView: View {
                             + (liveSubtitles.isCatchingUp ? "（追赶中）" : "")
                     )
                 }
+
+                rowDivider
+
+                settingsRow(title: "节奏诊断日志") {
+                    Toggle("", isOn: $diagnosticsLogEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+
+                Text(
+                    "记录字幕改写次数、取词锚点与延迟，写到 "
+                        + "~/.localtranslate/live-subtitles/。"
+                        + "调字幕节奏时打开，跑一段访谈再关掉；实时字幕默认不写盘。"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

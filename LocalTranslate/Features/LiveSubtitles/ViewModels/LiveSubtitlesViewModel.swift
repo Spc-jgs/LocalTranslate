@@ -70,6 +70,9 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private var lastCommitAt: ContinuousClock.Instant?
     private var pendingCaption: PendingCaption?
     private var lastCommittedCaption = ""
+    /// 节奏诊断。默认关闭，开着才创建文件、才持有句柄。
+    private let diagnostics = LiveSubtitleDiagnosticsLog.shared
+    private var lastAnchorSourceText = ""
     /// 每次「改写」自增，View 拿它当动画身份——追加时不变，整行替换才淡入。
     @Published public private(set) var captionRewriteCount = 0
 
@@ -114,6 +117,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
               languageChangeTask == nil else { return }
 
         resetPipelineSession()
+        if AppSettings.liveDiagnosticsLogEnabled { diagnostics.begin() }
         errorMessage = nil
         isRunning = true
         isPreparing = true
@@ -162,6 +166,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
         isRunning = false
         isPreparing = false
+        diagnostics.end(reason: "user-stop")
         lifecycleGeneration += 1
         startTask?.cancel()
         startTask = nil
@@ -440,6 +445,11 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             audioEnd: key.audioRange.end,
             isCommitted: true
         )
+        diagnostics.segmentCommitted(
+            words: pending.sourceText
+                .split(whereSeparator: \Character.isWhitespace).count,
+            lag: displayLag
+        )
         refreshLiveSource()
     }
 
@@ -596,6 +606,12 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         let anchoredWordCount = anchored
             .split(whereSeparator: \Character.isWhitespace)
             .count
+        diagnostics.previewAnchor(
+            held: anchored.hasPrefix(lastAnchorSourceText)
+                && !lastAnchorSourceText.isEmpty,
+            words: anchoredWordCount
+        )
+        lastAnchorSourceText = anchored
         let droppedWordCount = max(words.count - anchoredWordCount, 0)
         let droppedFraction = Double(droppedWordCount) / Double(words.count)
         let adjustedStart = latestLiveSourceRange.start
@@ -648,6 +664,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 sourceText: sourceText,
                 audioEnd: audioEnd
             )
+            diagnostics.hold(cause: "commitHold")
             return
         }
 
@@ -664,12 +681,25 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 sourceText: sourceText,
                 audioEnd: audioEnd
             )
+            diagnostics.hold(cause: "throttle")
             return
         case .append(let value):
             currentTranslatedText = value
+            diagnostics.caption(
+                kind: "append",
+                gapMS: milliseconds(elapsed),
+                length: value.count,
+                isCommitted: isCommitted
+            )
         case .replace(let value):
             currentTranslatedText = value
             captionRewriteCount += 1
+            diagnostics.caption(
+                kind: "replace",
+                gapMS: milliseconds(elapsed),
+                length: value.count,
+                isCommitted: isCommitted
+            )
         }
 
         pendingCaption = nil
@@ -697,6 +727,11 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             audioEnd: pending.audioEnd,
             isCommitted: false
         )
+    }
+
+    private func milliseconds(_ duration: Duration) -> Int {
+        Int(duration.components.seconds * 1_000
+            + duration.components.attoseconds / 1_000_000_000_000_000)
     }
 
     private func refreshLagState() {
@@ -727,6 +762,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         currentTranslatedText = ""
         previousCaptionText = ""
         lastCommittedCaption = ""
+        lastAnchorSourceText = ""
         pendingCaption = nil
         lastCaptionChangeAt = nil
         lastCommitAt = nil
