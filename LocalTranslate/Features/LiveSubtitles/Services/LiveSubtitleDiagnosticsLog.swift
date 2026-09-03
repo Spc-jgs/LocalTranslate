@@ -66,6 +66,13 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private var commitBlocks: [String: Int] = [:]
     /// 每次改写时，新旧译文的公共前缀占新译文的比例。
     private var rewriteOverlaps: [Double] = []
+    /// 被擦掉重写的字数与最终定稿的字数。两者之比是 re-translation 文献里的
+    /// normalized erasure——每产出一个字，屏幕上被擦掉重写了几个字。
+    /// 论文（arXiv:1912.03393）给的朴素基线是 2.11。
+    private var erasedCharacters = 0
+    private var emittedCharacters = 0
+    private var pageTurns = 0
+    private var pageWordsAtTurn: [Double] = []
     private var lags: [Double] = []
     private var firstTokenMS: [Int] = []
 
@@ -139,6 +146,19 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                 "rewriteOverlap avg=\(average(rewriteOverlaps)) "
                     + "p90=\(percentile(rewriteOverlaps, 0.9))"
             )
+            write(
+                "normalizedErasure="
+                    + (emittedCharacters > 0
+                        ? String(
+                            format: "%.2f",
+                            Double(erasedCharacters) / Double(emittedCharacters)
+                        )
+                        : "n/a")
+                    + " erased=\(erasedCharacters) emitted=\(emittedCharacters)"
+            )
+            write(
+                "pageTurns=\(pageTurns) wordsPerPage avg=\(average(pageWordsAtTurn))"
+            )
             write("displayLag avg=\(average(lags))s p90=\(percentile(lags, 0.9))s")
             write(
                 "firstToken avg=\(average(firstTokenMS.map(Double.init)))ms "
@@ -162,6 +182,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         kind: String,
         gapMS: Int,
         length: Int,
+        previousLength: Int,
         commonPrefix: Int,
         isCommitted: Bool
     ) {
@@ -177,6 +198,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                         Double(commonPrefix) / Double(length)
                     )
                 }
+                erasedCharacters += max(previousLength - commonPrefix, 0)
             } else {
                 appends += 1
             }
@@ -262,10 +284,22 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     }
 
     /// 一句话定稿。这一行回答「这句在屏幕上折腾了几次」。
-    func segmentCommitted(words: Int, lag: Double) {
+    /// 主行翻页。翻页应该和上一行更新同时发生——这一行用来验证它有没有真的
+    /// 发生，以及每页攒了多少词。
+    func pageTurn(words: Int) {
+        queue.async { [self] in
+            guard handle != nil else { return }
+            pageTurns += 1
+            pageWordsAtTurn.append(Double(words))
+            write("page turn words=\(words)")
+        }
+    }
+
+    func segmentCommitted(words: Int, characters: Int, lag: Double) {
         queue.async { [self] in
             guard handle != nil else { return }
             segments += 1
+            emittedCharacters += characters
             changesPerSegment.append(segmentChanges)
             lags.append(lag)
             write(
@@ -302,6 +336,10 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         commitsAccepted = 0
         commitBlocks.removeAll()
         rewriteOverlaps.removeAll()
+        erasedCharacters = 0
+        emittedCharacters = 0
+        pageTurns = 0
+        pageWordsAtTurn.removeAll()
         lags.removeAll()
         firstTokenMS.removeAll()
         segmentChanges = 0

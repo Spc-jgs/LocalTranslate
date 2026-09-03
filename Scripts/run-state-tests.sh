@@ -57,6 +57,11 @@ run_suite "LiveSubtitlePipelineStateTests" \
   LocalTranslate/Features/LiveSubtitles/Models/LiveSubtitlePipelineModels.swift \
   Tests/LiveSubtitlePipelineStateTests.swift
 
+run_suite "LiveCaptionPagerTests" \
+  LocalTranslate/Features/LiveSubtitles/Models/LiveSubtitlePipelineModels.swift \
+  LocalTranslate/Features/LiveSubtitles/Models/LiveCaptionPager.swift \
+  Tests/LiveCaptionPagerTests.swift
+
 run_suite "LiveCaptionPresenterTests" \
   LocalTranslate/Features/LiveSubtitles/Models/LiveCaptionPresenter.swift \
   Tests/LiveCaptionPresenterTests.swift

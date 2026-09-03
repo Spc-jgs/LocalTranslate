@@ -85,6 +85,11 @@ public final class LiveTranslationService {
     private var pendingForeground: TranslationJob?
     private var activeJob: TranslationJob?
     private var activeIsArchive = false
+    /// 整句定稿。它决定主行何时翻页，说话期间也必须跑，所以不能扔进归档队列；
+    /// 但它同样不能去抢 preview 的槽位——那个槽位只有一个位子，而且新进来的
+    /// 会抢占正在跑的活，整句挤进去就是把用户正在看的 preview 丢掉。
+    /// 单独排一队：preview 之后，归档之前，先来先到，谁也不抢占谁。
+    private var stableQueue: [TranslationJob] = []
     private var archiveQueue: [TranslationJob] = []
     private var workerTask: Task<Void, Never>?
     private var workerGeneration = 0
@@ -162,6 +167,39 @@ public final class LiveTranslationService {
         )
     }
 
+    /// 整句定稿翻译。主行靠它翻页，所以说话期间也要跑；但它排在 preview
+    /// 之后，且不抢占正在跑的活。
+    public func enqueueStable(
+        key: LiveTranslationRequestKey,
+        _ text: String,
+        context: [SubtitleItem] = [],
+        sourceLanguage: SubtitleSourceLanguage,
+        onCompletion: @escaping @MainActor (LiveTranslationRequestKey, String) -> Void
+    ) {
+        guard key.kind == .final else { return }
+        let sourceText = normalized(text)
+        guard !sourceText.isEmpty else { return }
+
+        guard sourceLanguage.needsTranslationToSimplifiedChinese else {
+            onCompletion(key, sourceText)
+            return
+        }
+
+        stableQueue.append(
+            TranslationJob(
+                key: key,
+                sourceText: sourceText,
+                continuing: "",
+                context: Array(context.suffix(1)),
+                sourceLanguage: sourceLanguage,
+                archivable: false,
+                onPartial: { _, _ in },
+                completion: onCompletion
+            )
+        )
+        startWorkerIfNeeded()
+    }
+
     public func enqueueArchive(
         key: LiveTranslationRequestKey,
         _ text: String,
@@ -195,6 +233,7 @@ public final class LiveTranslationService {
         pendingForeground = nil
         activeJob = nil
         activeIsArchive = false
+        stableQueue.removeAll(keepingCapacity: false)
         archiveQueue.removeAll(keepingCapacity: false)
         workerTask?.cancel()
         workerTask = nil
@@ -297,6 +336,7 @@ public final class LiveTranslationService {
     private func startWorkerIfNeeded() {
         guard workerTask == nil,
               pendingForeground != nil
+                || !stableQueue.isEmpty
                 || (!liveActivity && !archiveQueue.isEmpty) else { return }
         let generation = workerGeneration
         workerTask = Task { [weak self] in
@@ -315,11 +355,11 @@ public final class LiveTranslationService {
         }
 
         while !Task.isCancelled, workerGeneration == generation {
-            if pendingForeground == nil, liveActivity {
+            if pendingForeground == nil, stableQueue.isEmpty, liveActivity {
                 return
             }
 
-            if pendingForeground == nil, !archiveQueue.isEmpty {
+            if pendingForeground == nil, stableQueue.isEmpty, !archiveQueue.isEmpty {
                 // Give the live preview throttle a short opportunity to fill
                 // the foreground slot before starting background history work.
                 // This avoids repeatedly starting and cancelling archive HTTP
@@ -339,6 +379,9 @@ public final class LiveTranslationService {
                 pendingForeground = nil
                 activeIsArchive = false
                 job = foreground
+            } else if !stableQueue.isEmpty {
+                activeIsArchive = false
+                job = stableQueue.removeFirst()
             } else if !archiveQueue.isEmpty {
                 activeIsArchive = true
                 job = archiveQueue.removeFirst()

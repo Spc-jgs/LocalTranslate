@@ -56,6 +56,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
     private var sessionID = UUID()
     private var windowPlanner = LiveTranslationWindowPlanner()
+    /// 主行显示到哪一段，由字幕自己分页，不跟 planner 的切分共用边界。
+    private var pager = LiveCaptionPager()
     private var volatileSpans: [LiveTranscriptSpan] = []
     private var pendingStableWindows: [UUID: PendingStableWindow] = [:]
     private var completedSegmentIDs: Set<UUID> = []
@@ -329,6 +331,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         )
         volatileSpans = update.volatileSpans
         windowPlanner.append(finalizedSpans: update.finalizedSpans)
+        pager.append(finalizedSpans: update.finalizedSpans)
 
         let stableWindows = windowPlanner.drain(force: false)
         diagnostics.plannerDrain(
@@ -410,7 +413,13 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             key: key,
             sourceText: window.sourceText
         )
-        translationService.enqueueArchive(
+        // 主行靠这一条翻页，所以说话期间也得跑——走归档队列时它成批堆到静音
+        // 才冲出来（实测相邻 segment 行号差为 2 的占一半），主行等不到。
+        // 但它也不能去抢 preview 的槽位：那个槽位只有一个位子、新来的还会抢占
+        // 正在跑的活，上一版这么改直接把 preview 丢没了（32 秒只上屏 1 次，
+        // 延迟涨到 13.8 秒）。enqueueStable 是它自己的队列，排在 preview 之后、
+        // 归档之前，谁也不抢占谁。
+        translationService.enqueueStable(
             key: key,
             window.sourceText,
             context: Array(subtitleHistory.suffix(1)),
@@ -483,9 +492,14 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         // 批量补齐时中间那几条早就不是「上一句」了，只有最后一条才是。
         scheduleFrontRow(resolved)
         lastCommittedCaption = resolved
+        // 翻页和上一行更新是同一个动作的两面：这句进了上一行，主行就从它之后
+        // 重新开始。分开做的话，主行要么凭空缩水，要么把已经定稿的话又显示一遍。
+        diagnostics.pageTurn(words: pager.wordCount)
+        pager.turnPage(through: key.audioRange.end)
         diagnostics.segmentCommitted(
             words: pending.sourceText
                 .split(whereSeparator: \Character.isWhitespace).count,
+            characters: resolved.count,
             lag: displayLag
         )
 
@@ -529,12 +543,14 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             .sorted { $0.range.start < $1.range.start }
             .map(\.text)
             .joined(separator: " ")
+        // 主行读的是自己那一页，不是 planner 还没切走的部分——planner 一切走
+        // pending，后者就骤然只剩 volatile，译文跟着从 38 字缩成 6 字。
         let sourceText = LiveSubtitleSemanticSegmenter.join(
-            windowPlanner.pendingSourceText,
+            pager.pageText,
             volatileText
         )
 
-        var range = windowPlanner.pendingRange
+        var range = pager.pageRange
         for span in volatileSpans {
             range = range.map { $0.union(span.range) } ?? span.range
         }
@@ -772,22 +788,26 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             return
         case .append(let value):
             let common = currentTranslatedText.commonPrefix(with: value).count
+            let previousLength = currentTranslatedText.count
             currentTranslatedText = value
             diagnostics.caption(
                 kind: "append",
                 gapMS: milliseconds(elapsed),
                 length: value.count,
+                previousLength: previousLength,
                 commonPrefix: common,
                 isCommitted: isCommitted
             )
         case .replace(let value):
             let common = currentTranslatedText.commonPrefix(with: value).count
+            let previousLength = currentTranslatedText.count
             currentTranslatedText = value
             captionRewriteCount += 1
             diagnostics.caption(
                 kind: "replace",
                 gapMS: milliseconds(elapsed),
                 length: value.count,
+                previousLength: previousLength,
                 commonPrefix: common,
                 isCommitted: isCommitted
             )
@@ -852,6 +872,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         previewCoalesceTask?.cancel()
         previewCoalesceTask = nil
         windowPlanner.reset()
+        pager.reset()
         volatileSpans.removeAll(keepingCapacity: false)
         pendingStableWindows.removeAll(keepingCapacity: false)
         completedSegmentIDs.removeAll(keepingCapacity: false)
