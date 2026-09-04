@@ -8,7 +8,8 @@ struct LiveCaptionPagerTests {
         overlongPageFallsBackToASemanticBoundary()
         overlongPageWithoutPunctuationStillHasACeiling()
         ingestingTheSameSpanTwiceDoesNotDuplicate()
-        print("LiveCaptionPagerTests: 5 passed")
+        plannerWindowsAlignWithPagerWordBoundaries()
+        print("LiveCaptionPagerTests: 6 passed")
     }
 
     /// 这是这套东西存在的理由：planner 切走一段不该让主行缩水。
@@ -89,5 +90,41 @@ struct LiveCaptionPagerTests {
             FileHandle.standardError.write(Data("✗ \(message)\n".utf8))
             exit(1)
         }
+    }
+
+    /// planner 切窗口和 pager 攒页，各自算了一份词的时间轴。眼下算法一样，
+    /// 但那是两份代码——一旦漂移，`turnPage(through:)` 就会多删或少删词：
+    /// 主行要么凭空丢内容，要么把已经定过稿的话再显示一遍，而且不会有任何
+    /// 报错。这里锁住真正的不变量：**window 消费掉的 + 页面剩下的 = 全部**。
+    private static func plannerWindowsAlignWithPagerWordBoundaries() {
+        let sentence = "we should ship it today, and then we can look at the "
+            + "numbers tomorrow morning before the review meeting starts"
+        let source = span(sentence, start: 0, duration: 20)
+
+        var planner = LiveTranslationWindowPlanner()
+        var pager = LiveCaptionPager()
+        planner.append(finalizedSpans: [source])
+        pager.append(finalizedSpans: [source])
+
+        var consumed: [String] = []
+        for window in planner.drain(force: true) {
+            consumed.append(window.sourceText)
+            pager.turnPage(through: window.range.end)
+        }
+
+        expect(!consumed.isEmpty, "planner 一个窗口都没切出来，这个用例就没意义了")
+        expect(
+            pager.isEmpty,
+            "所有窗口都定稿之后页面还剩下 \(pager.wordCount) 个词：\(pager.pageText)"
+        )
+
+        let normalized = LiveSubtitleSemanticSegmenter.normalize(sentence)
+        let rebuilt = LiveSubtitleSemanticSegmenter.normalize(
+            consumed.joined(separator: " ")
+        )
+        expect(
+            rebuilt == normalized,
+            "窗口拼回来和原文对不上：\(rebuilt)"
+        )
     }
 }

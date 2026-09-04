@@ -80,6 +80,9 @@ public final class LiveTranslationService {
         let archivable: Bool
         let onPartial: @MainActor (LiveTranslationRequestKey, String) -> Void
         let completion: @MainActor (LiveTranslationRequestKey, String) -> Void
+
+        /// 整句定稿：主行靠它翻页，不能被打断重来。
+        var isStable: Bool { key.kind == .final && !archivable }
     }
 
     private var pendingForeground: TranslationJob?
@@ -167,6 +170,10 @@ public final class LiveTranslationService {
         )
     }
 
+    /// 整句积压的上限。说得比翻得快时，最旧的那几条对应的内容早就翻页过去了，
+    /// 留着只会让后面的更晚到。丢弃时回一个空串，让调用方清掉待办记录。
+    private static let maximumStableBacklog = 4
+
     /// 整句定稿翻译。主行靠它翻页，所以说话期间也要跑；但它排在 preview
     /// 之后，且不抢占正在跑的活。
     public func enqueueStable(
@@ -197,6 +204,10 @@ public final class LiveTranslationService {
                 completion: onCompletion
             )
         )
+        while stableQueue.count > Self.maximumStableBacklog {
+            let dropped = stableQueue.removeFirst()
+            dropped.completion(dropped.key, "")
+        }
         startWorkerIfNeeded()
     }
 
@@ -294,10 +305,15 @@ public final class LiveTranslationService {
         pendingForeground = job
         trace("foreground-enqueued", key: job.key)
 
-        if let activeJob, activeJob.key != job.key {
+        if let activeJob, activeJob.key != job.key, !activeJob.isStable {
             // The overlay follows the newest stable/preview window. A stable
             // request displaced from the live slot is retained as archive
             // work; an obsolete preview is intentionally discarded.
+            //
+            // 但正在跑的整句定稿不抢占：它只要几百毫秒，主行等着它翻页，
+            // 而它被 cancel 之后 completion 不会触发（drainQueue 检查
+            // workerGeneration 就返回了），调用方的待办记录会一直挂着，
+            // 那一句永远翻不了页。preview 等它跑完，比杀掉重排划算。
             preemptActiveJob(requeue: activeJob.archivable)
         }
         startWorkerIfNeeded()
