@@ -92,6 +92,14 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private let previewCoalesceInterval: Duration = .milliseconds(90)
     private let catchUpCoalesceInterval: Duration = .milliseconds(50)
     private let silenceFlushInterval: TimeInterval = 0.7
+    /// 少于这个词数的整句窗口不占上一行、也不翻页。
+    ///
+    /// planner 的 `force` 路径（静音 flush）绕过它自己的语义判断，把剩下的词
+    /// 全部打成一个窗口——实测切出过 1 词的窗口，也切出过 33 词的。一个词的
+    /// 译文占住上一行没有信息量，翻页翻掉它等于把主行清空；同传研究里也早有
+    /// 结论：输入太短模型只会给出错误的译文。这类窗口照常进历史，
+    /// 内容留在主行，等下一个够长的窗口定稿时一并翻页。
+    private static let minimumFrontRowWords = 3
 
     private init() {
         if let savedLanguage = UserDefaults.standard.string(
@@ -331,7 +339,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         )
         volatileSpans = update.volatileSpans
         windowPlanner.append(finalizedSpans: update.finalizedSpans)
-        pager.append(finalizedSpans: update.finalizedSpans)
+        let trimmedWords = pager.append(finalizedSpans: update.finalizedSpans)
+        if trimmedWords > 0 { diagnostics.pageTrimmed(words: trimmedWords) }
 
         let stableWindows = windowPlanner.drain(force: false)
         diagnostics.plannerDrain(
@@ -480,6 +489,18 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 windowEnd: key.audioRange.end,
                 displayedEnd: displayedAudioEnd
             )
+            return
+        }
+
+        let windowWords = pending.sourceText
+            .split(whereSeparator: \Character.isWhitespace).count
+        guard windowWords >= Self.minimumFrontRowWords else {
+            diagnostics.commitBlocked(
+                reason: "tooShort",
+                windowEnd: key.audioRange.end,
+                displayedEnd: displayedAudioEnd
+            )
+            refreshLiveSource()
             return
         }
 
@@ -776,7 +797,14 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         switch LiveCaptionPresenter.update(
             displayed: currentTranslatedText,
             incoming: text,
-            sinceLastChange: elapsed
+            sinceLastChange: elapsed,
+            // 定稿是这段话的最终形态，不受改写节流约束；内容没变时仍然不重绘。
+            // 预览的门槛按屏幕上已经有多少字算——字越多越需要时间读完。
+            minimumHold: isCommitted
+                ? .zero
+                : LiveCaptionPresenter.minimumHold(
+                    forDisplayed: currentTranslatedText.count
+                )
         ) {
         case .hold:
             pendingCaption = PendingCaption(

@@ -8,8 +8,9 @@ struct LiveCaptionPresenterTests {
         captionNeverShrinksBackWithinTheHold()
         identicalTextDoesNotTouchTheScreen()
         committedCaptionHoldsItsSlot()
+        holdScalesWithHowMuchIsOnScreen()
         stitchJoinsContinuationOntoWhatIsAlreadyOnScreen()
-        print("LiveCaptionPresenterTests: 6 passed")
+        print("LiveCaptionPresenterTests: 7 passed")
     }
 
     /// 往后长不算打断阅读：已读的字一个没动，节流反而让字幕白白落后。
@@ -17,7 +18,8 @@ struct LiveCaptionPresenterTests {
         let update = LiveCaptionPresenter.update(
             displayed: "他说这件事",
             incoming: "他说这件事很重要",
-            sinceLastChange: .zero
+            sinceLastChange: .zero,
+            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 5)
         )
         expect(
             update == .append("他说这件事很重要"),
@@ -30,14 +32,16 @@ struct LiveCaptionPresenterTests {
         let tooSoon = LiveCaptionPresenter.update(
             displayed: "他说这件事很重要",
             incoming: "她认为这件事很关键",
-            sinceLastChange: .milliseconds(200)
+            sinceLastChange: .milliseconds(200),
+            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 8)
         )
         expect(tooSoon == .hold, "改写没有等到最短停留时间就上屏了")
 
         let later = LiveCaptionPresenter.update(
             displayed: "他说这件事很重要",
             incoming: "她认为这件事很关键",
-            sinceLastChange: .milliseconds(800)
+            sinceLastChange: .milliseconds(1_200),
+            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 8)
         )
         expect(
             later == .replace("她认为这件事很关键"),
@@ -50,7 +54,8 @@ struct LiveCaptionPresenterTests {
         let update = LiveCaptionPresenter.update(
             displayed: "他说这件事很重要",
             incoming: "他说这件事",
-            sinceLastChange: .milliseconds(100)
+            sinceLastChange: .milliseconds(100),
+            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 8)
         )
         expect(update == .hold, "字幕在停留期内缩回了")
     }
@@ -59,21 +64,24 @@ struct LiveCaptionPresenterTests {
         let same = LiveCaptionPresenter.update(
             displayed: "他说这件事",
             incoming: "他说这件事",
-            sinceLastChange: .seconds(5)
+            sinceLastChange: .seconds(5),
+            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 5)
         )
         expect(same == .hold, "同样的文本又重绘了一次")
 
         let empty = LiveCaptionPresenter.update(
             displayed: "他说这件事",
             incoming: "   ",
-            sinceLastChange: .seconds(5)
+            sinceLastChange: .seconds(5),
+            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 5)
         )
         expect(empty == .hold, "空译文把已显示的字幕清掉了")
 
         let first = LiveCaptionPresenter.update(
             displayed: "",
             incoming: "他说这件事",
-            sinceLastChange: .zero
+            sinceLastChange: .zero,
+            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 0)
         )
         expect(
             first == .replace("他说这件事"),
@@ -141,6 +149,52 @@ struct LiveCaptionPresenterTests {
             LiveCaptionPresenter.stitch(prefix: "它知道你", continuation: "   ")
                 == "它知道你",
             "空续写把已显示的字幕清掉了"
+        )
+    }
+
+    /// 一条字幕能留多久，取决于屏幕上有多少字要读。
+    ///
+    /// 原先是固定 700 ms，比 Netflix 的 5/6 秒最短显示时长还短，而且不看内容：
+    /// 20 字的译文显示 700 ms，按 20 字/秒的阅读上限只够读 14 字。
+    private static func holdScalesWithHowMuchIsOnScreen() {
+        expect(
+            LiveCaptionPresenter.minimumHold(forDisplayed: 0)
+                == LiveCaptionPresenter.minimumHoldFloor,
+            "空字幕没有落到地板值"
+        )
+        expect(
+            LiveCaptionPresenter.minimumHold(forDisplayed: 10)
+                == LiveCaptionPresenter.minimumHoldFloor,
+            "短字幕不该低于地板值"
+        )
+
+        let long = LiveCaptionPresenter.minimumHold(forDisplayed: 40)
+        expect(
+            long > LiveCaptionPresenter.minimumHoldFloor,
+            "长字幕的停留时间没有跟着内容涨"
+        )
+        // 40 字按 20 字/秒要读两秒。
+        expect(long == .milliseconds(2_000), "停留时间和阅读速度对不上：\(long)")
+
+        // 同样的间隔，短字幕可以换掉，长字幕还得再等。
+        let elapsed = Duration.milliseconds(1_200)
+        expect(
+            LiveCaptionPresenter.update(
+                displayed: String(repeating: "字", count: 10),
+                incoming: "换成别的说法",
+                sinceLastChange: elapsed,
+                minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 10)
+            ) != .hold,
+            "短字幕等够了却没让改写通过"
+        )
+        expect(
+            LiveCaptionPresenter.update(
+                displayed: String(repeating: "字", count: 40),
+                incoming: "换成别的说法",
+                sinceLastChange: elapsed,
+                minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 40)
+            ) == .hold,
+            "40 字的字幕只显示 1.2 秒就被换掉了"
         )
     }
 }

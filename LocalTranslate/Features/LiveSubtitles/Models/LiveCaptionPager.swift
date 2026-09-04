@@ -53,7 +53,12 @@ nonisolated struct LiveCaptionPager: Sendable {
 
     var wordCount: Int { words.count }
 
-    mutating func append(finalizedSpans: [LiveTranscriptSpan]) {
+    /// 返回这次因为超上界而被裁掉的词数。
+    ///
+    /// 裁掉的内容还没定稿、也没进上一行，用户看到它从主行消失却没有去处。
+    /// 这是设计上的取舍（否则页面无限增长），但必须能被观测到。
+    @discardableResult
+    mutating func append(finalizedSpans: [LiveTranscriptSpan]) -> Int {
         for span in finalizedSpans.sorted(by: { $0.range.start < $1.range.start }) {
             guard span.isFinalized,
                   !ingestedSpanIDs.contains(span.id) else { continue }
@@ -61,7 +66,9 @@ nonisolated struct LiveCaptionPager: Sendable {
             words.append(contentsOf: Self.timedWords(from: span))
         }
         words.sort { $0.range.start < $1.range.start }
+        let before = words.count
         trimToLimit()
+        return before - words.count
     }
 
     /// 这段话已经定稿并进了上一行，主行从它之后重新开始。

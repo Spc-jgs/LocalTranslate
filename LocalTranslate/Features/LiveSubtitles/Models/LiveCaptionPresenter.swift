@@ -16,11 +16,25 @@ import Foundation
 /// 被压住的那次不会丢：调用方留着它，下一次识别回调（讲话时每 50-100 ms 一次）
 /// 会重新评估，静音时由 flush 兜底。所以这里不持有定时器。
 nonisolated struct LiveCaptionPresenter {
-    /// 两次「改写」之间的最短间隔。
+    /// 一条字幕至少要留多久才允许被改写。
     ///
-    /// 取值是可读性和滞后之间的直接取舍：调大更好读、字幕更滞后。700 ms 大约是
-    /// 一行短字幕能读完的下限，同时不会让改写堆积到静音之后才出现。
-    static let minimumHoldInterval: Duration = .milliseconds(700)
+    /// 原先是固定 700 ms，两处都不对：它比 Netflix 的 5/6 秒（833 ms）最短
+    /// 显示时长还短，而且没有跟内容长度挂钩——一条 20 字的译文显示 700 ms，
+    /// 按 Netflix 成人内容 20 字/秒的阅读速度上限只够读 14 字，读不完就被换掉。
+    ///
+    /// 改成按已经显示出去的字数算，并保留 833 ms 的地板。BBC 给直播字幕的
+    /// 口径更保守（160-180 wpm，约每词 0.33 秒），这里取 Netflix 的速度上限，
+    /// 免得把延迟推得太高——实测上屏间隔中位数本来就在 1.9-2.7 秒，这个门槛
+    /// 只在密集改写时才真正生效，而那正是最难读的时候。
+    static let minimumHoldFloor: Duration = .milliseconds(833)
+    static let readingCharactersPerSecond: Double = 20
+
+    static func minimumHold(forDisplayed characters: Int) -> Duration {
+        let needed = Duration.milliseconds(
+            Int((Double(max(characters, 0)) / readingCharactersPerSecond) * 1_000)
+        )
+        return max(minimumHoldFloor, needed)
+    }
 
     enum Update: Equatable {
         /// 新译文以已显示内容为前缀，往后追加。已读部分不变。
@@ -35,7 +49,7 @@ nonisolated struct LiveCaptionPresenter {
         displayed: String,
         incoming: String,
         sinceLastChange: Duration,
-        minimumHold: Duration = minimumHoldInterval
+        minimumHold: Duration
     ) -> Update {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !incoming.isEmpty else { return .hold }

@@ -73,6 +73,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private var emittedCharacters = 0
     private var pageTurns = 0
     private var pageWordsAtTurn: [Double] = []
+    private var pageTrims = 0
+    private var trimmedWords = 0
     private var lags: [Double] = []
     private var firstTokenMS: [Int] = []
 
@@ -157,7 +159,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                     + " erased=\(erasedCharacters) emitted=\(emittedCharacters)"
             )
             write(
-                "pageTurns=\(pageTurns) wordsPerPage avg=\(average(pageWordsAtTurn))"
+                "pageTurns=\(pageTurns) wordsPerPage avg=\(average(pageWordsAtTurn)) "
+                    + "trims=\(pageTrims) trimmedWords=\(trimmedWords)"
             )
             write("displayLag avg=\(average(lags))s p90=\(percentile(lags, 0.9))s")
             write(
@@ -295,6 +298,17 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         }
     }
 
+    /// 页面超上界被裁掉了多少词。这部分内容还没定稿也没进上一行，
+    /// 从主行消失却没有去处——次数多就说明上界定得太紧。
+    func pageTrimmed(words: Int) {
+        queue.async { [self] in
+            guard handle != nil else { return }
+            pageTrims += 1
+            trimmedWords += words
+            write("page trim words=\(words)")
+        }
+    }
+
     func segmentCommitted(words: Int, characters: Int, lag: Double) {
         queue.async { [self] in
             guard handle != nil else { return }
@@ -340,6 +354,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         emittedCharacters = 0
         pageTurns = 0
         pageWordsAtTurn.removeAll()
+        pageTrims = 0
+        trimmedWords = 0
         lags.removeAll()
         firstTokenMS.removeAll()
         segmentChanges = 0
