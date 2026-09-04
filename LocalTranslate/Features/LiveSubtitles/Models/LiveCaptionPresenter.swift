@@ -18,18 +18,19 @@ import Foundation
 nonisolated struct LiveCaptionPresenter {
     /// 一条字幕至少要留多久才允许被改写。
     ///
-    /// 原先是固定 700 ms，两处都不对：它比 Netflix 的 5/6 秒（833 ms）最短
-    /// 显示时长还短，而且没有跟内容长度挂钩——一条 20 字的译文显示 700 ms，
-    /// 按 Netflix 成人内容 20 字/秒的阅读速度上限只够读 14 字，读不完就被换掉。
+    /// Netflix 的 5/6 秒最短显示时长与 20 字/秒阅读上限是给预制字幕定的——
+    /// 每条独立出现、独立读完。主行不是那样：它持续增长，读者跟着往下读。
+    /// 所以这里量的是**这次改写会让人重读多少字**（公共前缀之后的部分），
+    /// 而不是整条字幕的长度；配套地，起算点是这段内容第一次出现的时刻，
+    /// 不是上一次变化——一条字幕分几次 append 长到 45 字，读者从第一次出现
+    /// 就在读了，不该因为最后一次 append 才过 500 ms 就被判成「还没读完」。
     ///
-    /// 改成按已经显示出去的字数算，并保留 833 ms 的地板。BBC 给直播字幕的
-    /// 口径更保守（160-180 wpm，约每词 0.33 秒），这里取 Netflix 的速度上限，
-    /// 免得把延迟推得太高——实测上屏间隔中位数本来就在 1.9-2.7 秒，这个门槛
-    /// 只在密集改写时才真正生效，而那正是最难读的时候。
+    /// 头一版按整条长度算、又从上次变化起算，两头都放大：页面上界一放宽，
+    /// displayLag 的 p90 就从 2.99 秒涨到 5.89 秒。
     static let minimumHoldFloor: Duration = .milliseconds(833)
     static let readingCharactersPerSecond: Double = 20
 
-    static func minimumHold(forDisplayed characters: Int) -> Duration {
+    static func minimumHold(forReread characters: Int) -> Duration {
         let needed = Duration.milliseconds(
             Int((Double(max(characters, 0)) / readingCharactersPerSecond) * 1_000)
         )
@@ -45,11 +46,13 @@ nonisolated struct LiveCaptionPresenter {
         case hold
     }
 
+    /// - Parameter sinceContentShown: 当前这段内容第一次出现到现在有多久。
+    ///   追加不重置它，整行改写才重置——追加是同一段内容在往下长。
     static func update(
         displayed: String,
         incoming: String,
-        sinceLastChange: Duration,
-        minimumHold: Duration
+        sinceContentShown: Duration,
+        bypassHold: Bool = false
     ) -> Update {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !incoming.isEmpty else { return .hold }
@@ -59,8 +62,15 @@ nonisolated struct LiveCaptionPresenter {
         if incoming.hasPrefix(displayed) {
             return .append(incoming)
         }
-        // 改写，也包括译文变短——不让已经读到的字缩回去，除非它已经停够了。
-        guard sinceLastChange >= minimumHold else { return .hold }
+        guard !bypassHold else { return .replace(incoming) }
+
+        // 改写要重读的只是公共前缀之后那一段，不是整条字幕。译文变短也走这里
+        // ——不让已经读到的字缩回去，除非这段内容已经显示够久。
+        let reread = displayed.count
+            - displayed.commonPrefix(with: incoming).count
+        guard sinceContentShown >= minimumHold(forReread: reread) else {
+            return .hold
+        }
         return .replace(incoming)
     }
 

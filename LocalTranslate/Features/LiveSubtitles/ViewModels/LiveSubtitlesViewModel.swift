@@ -76,6 +76,9 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     // 字幕行的展示节奏。规则在 LiveCaptionPresenter，这里只留它需要的时刻。
     private let captionClock = ContinuousClock()
     private var lastCaptionChangeAt: ContinuousClock.Instant?
+    /// 当前这段内容第一次出现的时刻。追加不重置，整行改写才重置——
+    /// 读者从这段第一次出现就在读了，不该按最后一次追加起算。
+    private var contentShownAt: ContinuousClock.Instant?
     private var lastCommitAt: ContinuousClock.Instant?
     private var pendingCaption: PendingCaption?
     private var lastCommittedCaption = ""
@@ -794,19 +797,16 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             return
         }
 
+        let shownFor = contentShownAt.map { $0.duration(to: now) }
+            ?? .seconds(3_600)
         let elapsed = lastCaptionChangeAt.map { $0.duration(to: now) }
             ?? .seconds(3_600)
         switch LiveCaptionPresenter.update(
             displayed: currentTranslatedText,
             incoming: text,
-            sinceLastChange: elapsed,
-            // 定稿是这段话的最终形态，不受改写节流约束；内容没变时仍然不重绘。
-            // 预览的门槛按屏幕上已经有多少字算——字越多越需要时间读完。
-            minimumHold: isCommitted
-                ? .zero
-                : LiveCaptionPresenter.minimumHold(
-                    forDisplayed: currentTranslatedText.count
-                )
+            sinceContentShown: shownFor,
+            // 定稿是这段话的最终形态，不受阅读门槛约束；内容没变时仍然不重绘。
+            bypassHold: isCommitted
         ) {
         case .hold:
             pendingCaption = PendingCaption(
@@ -833,6 +833,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             let previousLength = currentTranslatedText.count
             currentTranslatedText = value
             captionRewriteCount += 1
+            // 换了一段内容，阅读计时重新开始；追加不动它。
+            contentShownAt = now
             diagnostics.caption(
                 kind: "replace",
                 gapMS: milliseconds(elapsed),
@@ -926,6 +928,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         displayedSourceText = ""
         pendingCaption = nil
         lastCaptionChangeAt = nil
+        contentShownAt = nil
         lastCommitAt = nil
         displayLag = 0
         isCatchingUp = false

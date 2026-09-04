@@ -8,7 +8,7 @@ struct LiveCaptionPresenterTests {
         captionNeverShrinksBackWithinTheHold()
         identicalTextDoesNotTouchTheScreen()
         committedCaptionHoldsItsSlot()
-        holdScalesWithHowMuchIsOnScreen()
+        holdScalesWithHowMuchMustBeReread()
         stitchJoinsContinuationOntoWhatIsAlreadyOnScreen()
         print("LiveCaptionPresenterTests: 7 passed")
     }
@@ -18,8 +18,7 @@ struct LiveCaptionPresenterTests {
         let update = LiveCaptionPresenter.update(
             displayed: "他说这件事",
             incoming: "他说这件事很重要",
-            sinceLastChange: .zero,
-            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 5)
+            sinceContentShown: .zero
         )
         expect(
             update == .append("他说这件事很重要"),
@@ -32,16 +31,14 @@ struct LiveCaptionPresenterTests {
         let tooSoon = LiveCaptionPresenter.update(
             displayed: "他说这件事很重要",
             incoming: "她认为这件事很关键",
-            sinceLastChange: .milliseconds(200),
-            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 8)
+            sinceContentShown: .milliseconds(200)
         )
         expect(tooSoon == .hold, "改写没有等到最短停留时间就上屏了")
 
         let later = LiveCaptionPresenter.update(
             displayed: "他说这件事很重要",
             incoming: "她认为这件事很关键",
-            sinceLastChange: .milliseconds(1_200),
-            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 8)
+            sinceContentShown: .milliseconds(1_200)
         )
         expect(
             later == .replace("她认为这件事很关键"),
@@ -54,8 +51,7 @@ struct LiveCaptionPresenterTests {
         let update = LiveCaptionPresenter.update(
             displayed: "他说这件事很重要",
             incoming: "他说这件事",
-            sinceLastChange: .milliseconds(100),
-            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 8)
+            sinceContentShown: .milliseconds(100)
         )
         expect(update == .hold, "字幕在停留期内缩回了")
     }
@@ -64,24 +60,21 @@ struct LiveCaptionPresenterTests {
         let same = LiveCaptionPresenter.update(
             displayed: "他说这件事",
             incoming: "他说这件事",
-            sinceLastChange: .seconds(5),
-            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 5)
+            sinceContentShown: .seconds(5)
         )
         expect(same == .hold, "同样的文本又重绘了一次")
 
         let empty = LiveCaptionPresenter.update(
             displayed: "他说这件事",
             incoming: "   ",
-            sinceLastChange: .seconds(5),
-            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 5)
+            sinceContentShown: .seconds(5)
         )
         expect(empty == .hold, "空译文把已显示的字幕清掉了")
 
         let first = LiveCaptionPresenter.update(
             displayed: "",
             incoming: "他说这件事",
-            sinceLastChange: .zero,
-            minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 0)
+            sinceContentShown: .zero
         )
         expect(
             first == .replace("他说这件事"),
@@ -152,49 +145,53 @@ struct LiveCaptionPresenterTests {
         )
     }
 
-    /// 一条字幕能留多久，取决于屏幕上有多少字要读。
+    /// 门槛量的是「这次改写要重读多少字」，不是整条字幕的长度。
     ///
-    /// 原先是固定 700 ms，比 Netflix 的 5/6 秒最短显示时长还短，而且不看内容：
-    /// 20 字的译文显示 700 ms，按 20 字/秒的阅读上限只够读 14 字。
-    private static func holdScalesWithHowMuchIsOnScreen() {
-        expect(
-            LiveCaptionPresenter.minimumHold(forDisplayed: 0)
-                == LiveCaptionPresenter.minimumHoldFloor,
-            "空字幕没有落到地板值"
+    /// Netflix 的 20 字/秒是给预制字幕定的——每条独立读完。主行持续增长、
+    /// 读者跟着读，改写时只需要重读公共前缀之后那一段。按整条长度算会把
+    /// 延迟顶上去：实测页面上界一放宽，displayLag 的 p90 就从 2.99 秒涨到 5.89 秒。
+    private static func holdScalesWithHowMuchMustBeReread() {
+        let displayed = String(repeating: "字", count: 40)
+
+        // 只有结尾几个字变了：要重读的少，等一会儿就能换。
+        let smallEdit = LiveCaptionPresenter.update(
+            displayed: displayed,
+            incoming: String(repeating: "字", count: 38) + "改了",
+            sinceContentShown: .milliseconds(900)
         )
         expect(
-            LiveCaptionPresenter.minimumHold(forDisplayed: 10)
-                == LiveCaptionPresenter.minimumHoldFloor,
-            "短字幕不该低于地板值"
+            smallEdit == .replace(String(repeating: "字", count: 38) + "改了"),
+            "只改结尾两个字却按整条 40 字的阅读时间在等"
         )
 
-        let long = LiveCaptionPresenter.minimumHold(forDisplayed: 40)
-        expect(
-            long > LiveCaptionPresenter.minimumHoldFloor,
-            "长字幕的停留时间没有跟着内容涨"
-        )
-        // 40 字按 20 字/秒要读两秒。
-        expect(long == .milliseconds(2_000), "停留时间和阅读速度对不上：\(long)")
-
-        // 同样的间隔，短字幕可以换掉，长字幕还得再等。
-        let elapsed = Duration.milliseconds(1_200)
+        // 整段换掉：40 字要重读，按 20 字/秒需要两秒。
+        let full = "完全换了一种说法"
         expect(
             LiveCaptionPresenter.update(
-                displayed: String(repeating: "字", count: 10),
-                incoming: "换成别的说法",
-                sinceLastChange: elapsed,
-                minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 10)
-            ) != .hold,
-            "短字幕等够了却没让改写通过"
-        )
-        expect(
-            LiveCaptionPresenter.update(
-                displayed: String(repeating: "字", count: 40),
-                incoming: "换成别的说法",
-                sinceLastChange: elapsed,
-                minimumHold: LiveCaptionPresenter.minimumHold(forDisplayed: 40)
+                displayed: displayed,
+                incoming: full,
+                sinceContentShown: .milliseconds(900)
             ) == .hold,
-            "40 字的字幕只显示 1.2 秒就被换掉了"
+            "整段改写只显示 0.9 秒就换掉了"
+        )
+        expect(
+            LiveCaptionPresenter.update(
+                displayed: displayed,
+                incoming: full,
+                sinceContentShown: .milliseconds(2_100)
+            ) == .replace(full),
+            "整段改写等够两秒仍然被压着"
+        )
+
+        // 定稿不受门槛约束。
+        expect(
+            LiveCaptionPresenter.update(
+                displayed: displayed,
+                incoming: full,
+                sinceContentShown: .zero,
+                bypassHold: true
+            ) == .replace(full),
+            "整句定稿被阅读门槛挡住了"
         )
     }
 }
