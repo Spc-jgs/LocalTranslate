@@ -135,7 +135,8 @@ Core Audio process tap
   -> SpeechAnalyzer / SpeechTranscriber
   -> audio-range transcript ledger
   -> committed transcript + volatile partial
-  -> semantic window planner
+       ├─ semantic window planner (翻译单元) -> 整句定稿请求
+       └─ caption pager           (显示单元) -> preview 请求
   -> Ollama request coordinator
   -> committed translation + preview translation
   -> current-highlighted overlay + immutable history
@@ -154,7 +155,16 @@ Core Audio process tap
 - preview 面向当前讲话，允许从安全的短前缀启动；短语动词、连词或明显未闭合尾词继续等待最小上下文。
 - committed window 依据标点、时长、词数与安全尾词形成语义块；长句允许在从句边界切开，不等待完整自然句。
 - finalized transcript 进入历史窗口；volatile transcript 只驱动当前 preview。两者保留独立身份。
-- live preview 优先占用 Ollama worker；active speech 期间 archive 不与当前字幕竞争，静音或停止后再补历史翻译。
+- **翻译单元与显示单元分开**。planner 按标点、时长、词数切窗口，那是送去翻译的单位；
+  主行显示到哪由 `LiveCaptionPager` 自己攒页决定。两者共用边界时，planner 每切走一段
+  主行就凭空缩水（实测 178 秒内 23 次变短、平均 -13.7 字、最大 -35 字），等于把翻译的
+  内部节奏摊到用户眼前。翻页只在整句定稿进了上一行时发生，或页面攒过上界时切到语义边界。
+- Ollama worker 分三条通道，优先级依次是 live preview、整句定稿、archive。
+  preview 之间互相抢占（新的取代旧的）；正在跑的 archive 会被抢占并重排；
+  **正在跑的整句定稿跑完为止**——主行等它翻页，而 job 一旦 cancel 就不会触发 completion，
+  调用方的待办记录会一直挂着，那一句永远翻不了页。archive 仍然只在静音或停止后补历史。
+- preview 请求把已显示的译文作为末尾 assistant 消息送出，模型只能续写，
+  屏幕上的字因此不会被改写。整句定稿不续写——那是这段语音唯一一次能推翻先前措辞的机会。
 - 首条 preview 可以 append-only 流式展示；后续 revision 原子更新，避免逐 token 全文重写。
 
 ### 身份与 UI
@@ -174,6 +184,15 @@ audio ingress -> ASR volatile -> segment ready
 ```
 
 分别观察首屏、持续追赶和句尾 commit。降低某一阶段延迟时，以下稳定性不变量必须保持为绿：无源转录重复/错序、无 stale 覆盖、无 committed 回写、无全文闪烁。当前快速访谈约 2 秒时差记录在 GitHub Issue #3，属于后续性能项，不通过放宽这些不变量换取数字。
+
+**改字幕节奏之后要用真实语音验证。** 改写间隔、commit 定格、preview 取词上界、
+分页上界、planner 参数——这些都不会让任何测试变红，靠印象比较前后两版也不可靠
+（实测发生过：展示层的追加路径在旧取词方式下几乎永远命中不了，而那个结论是读代码
+推断出来的）。打开设置里的「节奏诊断日志」跑一段，读
+`~/.localtranslate/live-subtitles/` 的会话总表：`changesPerSegment` 是一句话在屏幕上
+变了几次，`normalizedErasure` 是每产出一个字被擦掉重写几个字
+（re-translation 文献的朴素基线 2.11），再配 `commit accepted/blocked` 与 `displayLag`。
+日志默认关闭，用完关掉——不写盘是实时字幕资源基线的一部分。
 
 **调整 planner 参数（`minimumWords` / `maximumWords` / `targetDuration` /
 `lookaheadWords`）必须同时运行 `./Scripts/run-state-tests.sh`。** 历史教训：
