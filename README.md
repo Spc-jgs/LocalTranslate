@@ -2,7 +2,7 @@
 
 LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译、截图 OCR 翻译、系统音频实时字幕和 AI 用量看板放在同一个菜单栏 App 中。翻译与语音内容默认只发送到本机 Ollama。
 
-当前已发布版本：[v1.6.3](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.6.3)
+当前已发布版本：[v1.7.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.7.0)
 
 ## 功能
 
@@ -25,18 +25,31 @@ LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译�
 - 使用 Core Audio private process tap 捕获系统输出，不安装虚拟声卡，也不创建屏幕共享流。
 - 使用 Apple `SpeechAnalyzer` / `SpeechTranscriber` 做端侧增量 ASR，再使用本地 Ollama 翻译。
 - 支持英语、日语、韩语、普通话、粤语、法语、德语、西班牙语和俄语；可切换双语、仅译文或仅原文。
-- 当前译文保持高亮，已确认历史字幕不因后续识别 revision 被改写。
+- 字幕条是固定的三行：上一句译文降权在最上，当前译文居中高亮，当前原文在最下。
+  三行的位置和高度全程不变，不会因为有没有译文而跳动。
+- 当前译文以续写方式增长——已经显示出来的字不会被改写。整句定稿是唯一一次可以
+  推翻先前措辞的机会，它定稿后进入上一行，主行随之翻到下一句。
+- 已确认的历史字幕不因后续识别 revision 被改写。
 
 实时链路不是“每次 partial 全文重翻”，而是两个并行状态：
 
 ```text
 system audio -> ASR -> committed transcript + volatile partial
-                    -> semantic segmentation
+                          ├─ semantic window planner (翻译单元) -> 整句定稿
+                          └─ caption pager           (显示单元) -> preview
                     -> committed translation + preview translation
                     -> immutable history + highlighted current caption
 ```
 
-audio range 用于消除 rolling overlap；`sessionID / segmentID / revision` 用于拦截旧 Ollama 响应。第一条当前译文可以 append-only 流式出现，后续 revision 原子更新，减少闪烁和语义跳变。
+翻译单元和显示单元是分开的：planner 按标点、时长和词数切出送去翻译的窗口，
+主行显示到哪由字幕自己攒页决定。两者共用边界时，planner 每切走一段主行就会
+凭空缩水。
+
+audio range 用于消除 rolling overlap；`sessionID / segmentID / revision` 用于拦截旧 Ollama 响应。preview 请求把已显示的译文作为末尾 assistant 消息送出，模型只能往后写，因此屏幕上的字不会被改写。
+
+调整字幕节奏时可以在设置的「实时字幕」页打开「节奏诊断日志」，会话总表写到
+`~/.localtranslate/live-subtitles/`，记录每句在屏幕上变了几次、被擦掉重写多少字
+以及字幕落后语音多少秒。默认关闭——不写盘是实时字幕的资源基线。
 
 ### AI 用量看板
 
@@ -48,6 +61,8 @@ audio range 用于消除 rolling overlap；`sessionID / segmentID / revision` �
   5 小时、每周额度；本机会话库提供可验证时间时统计模型 Token，尚无事件时间时
   只保留零 Token 模型证据并标明等待落盘。
 - 使用内存与磁盘增量缓存；单个 Provider 失败时保留其他可用数据。
+- 首次索引大量历史日志时分片进行，卡片上显示「已索引 x/y 个文件」并标明当前
+  数字尚不完整，补齐完成后自动消失。
 
 ## 环境要求
 
