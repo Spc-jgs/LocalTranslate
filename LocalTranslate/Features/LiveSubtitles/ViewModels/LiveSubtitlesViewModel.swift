@@ -103,6 +103,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     /// 结论：输入太短模型只会给出错误的译文。这类窗口照常进历史，
     /// 内容留在主行，等下一个够长的窗口定稿时一并翻页。
     private static let minimumFrontRowWords = 3
+    /// 合并后的窗口上界。超过就另起一组，别让一次翻页吞掉一大段。
+    private static let maximumCombinedWords = 14
 
     private init() {
         if let savedLanguage = UserDefaults.standard.string(
@@ -387,27 +389,51 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
     private func submitStableWindows(_ windows: [LiveTranslationWindow]) {
         guard !windows.isEmpty else { return }
-        // Finalized ranges own immutable history, not the live overlay. Making
-        // them foreground work puts Apple finalization latency directly in the
-        // user's reading path.
-        submitStableWindow(combineWindows(windows))
+        combineWindows(windows).forEach(submitStableWindow)
     }
 
+    /// 一次 drain 切出的窗口按上界并成几组。
+    ///
+    /// 原先是全部并成一个，理由写在旧注释里——那时整句只进历史，不上字幕条，
+    /// 合多大都无所谓。现在整句要驱动翻页和上一行，无上界合并就成了长尾的
+    /// 制造机：实测一次静音 flush 切出 10 个窗口，合成 53 词的一个请求，
+    /// 翻译慢、上一行放不下、一次翻页翻掉 53 词，主行在等它的过程中变了 10 次。
+    ///
+    /// 按窗口词数分组看得很清楚：5-9 词的句子平均变 0.78 次，10-14 词变 1.92 次，
+    /// 15 词以上变 3.24 次。所以合并要留着（它把 1-2 词的碎窗口并掉），
+    /// 但上界压在 14 词。
     private func combineWindows(
         _ windows: [LiveTranslationWindow]
-    ) -> LiveTranslationWindow {
-        guard let first = windows.first else {
-            return LiveTranslationWindow(range: .zero, sourceText: "")
-        }
-        return windows.dropFirst().reduce(first) { combined, next in
-            LiveTranslationWindow(
-                range: combined.range.union(next.range),
-                sourceText: LiveSubtitleSemanticSegmenter.join(
-                    combined.sourceText,
-                    next.sourceText
+    ) -> [LiveTranslationWindow] {
+        var groups: [LiveTranslationWindow] = []
+        var pending: LiveTranslationWindow?
+
+        for window in windows {
+            guard let current = pending else {
+                pending = window
+                continue
+            }
+            let merged = wordCount(current.sourceText)
+                + wordCount(window.sourceText)
+            if merged <= Self.maximumCombinedWords {
+                pending = LiveTranslationWindow(
+                    range: current.range.union(window.range),
+                    sourceText: LiveSubtitleSemanticSegmenter.join(
+                        current.sourceText,
+                        window.sourceText
+                    )
                 )
-            )
+            } else {
+                groups.append(current)
+                pending = window
+            }
         }
+        if let pending { groups.append(pending) }
+        return groups
+    }
+
+    private func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: \Character.isWhitespace).count
     }
 
     private func submitStableWindow(

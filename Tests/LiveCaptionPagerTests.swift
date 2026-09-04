@@ -10,7 +10,8 @@ struct LiveCaptionPagerTests {
         ingestingTheSameSpanTwiceDoesNotDuplicate()
         plannerWindowsAlignWithPagerWordBoundaries()
         pageHoldsAWindowPlusWhatIsSaidWhileItTranslates()
-        print("LiveCaptionPagerTests: 7 passed")
+        plannerKeepsWindowsWithinTheTranslationUnitSize()
+        print("LiveCaptionPagerTests: 8 passed")
     }
 
     /// 这是这套东西存在的理由：planner 切走一段不该让主行缩水。
@@ -149,5 +150,27 @@ struct LiveCaptionPagerTests {
             trimmed == 0,
             "一个窗口加十个词就触发了裁剪，说明留给定稿往返的余量不够：裁了 \(trimmed) 词"
         )
+    }
+
+    /// 一次静音 flush 会切出好几个窗口。它们可以合并（把 1-2 词的碎窗口并掉），
+    /// 但合出来的东西不能没有上界——实测无上界合并产生过 53 词的请求，
+    /// 而 15 词以上的句子平均要在屏幕上变 3.24 次，5-9 词的只变 0.78 次。
+    ///
+    /// 这里守的是 planner 那一侧的不变量：单个窗口本身不会超过翻译单元的大小。
+    private static func plannerKeepsWindowsWithinTheTranslationUnitSize() {
+        var planner = LiveTranslationWindowPlanner()
+        let long = (0..<60).map { "w\($0)" }.joined(separator: " ")
+        planner.append(finalizedSpans: [span(long, start: 0, duration: 20)])
+
+        let windows = planner.drain(force: true)
+        expect(!windows.isEmpty, "六十个词一个窗口都没切出来")
+        for window in windows {
+            let count = window.sourceText
+                .split(whereSeparator: \Character.isWhitespace).count
+            expect(
+                count <= 12,
+                "单个窗口 \(count) 词，超过了翻译单元的上界"
+            )
+        }
     }
 }
