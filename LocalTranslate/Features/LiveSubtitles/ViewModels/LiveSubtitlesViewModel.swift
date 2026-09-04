@@ -703,10 +703,12 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     /// 现在锚在从句边界上，一句话说完之前起点不动，译文因此能只往后长——
     /// 展示层的 `LiveCaptionPresenter` 也只有在这个前提下才有追加可走。
     ///
-    /// 上界放宽到 28 个词：请求变大会让单次翻译慢一些，但重写次数下来了，
-    /// 屏幕上真正发生的变化反而更少。
+    /// 上界要容得下「一整页 + 还没定稿的 volatile」。页面上界是 24 词，
+    /// volatile 常有十来个词，所以取 40——低于这个数就会退回按词数硬截，
+    /// 锚点跟着漂，译文整段重写。请求变大让单次翻译慢一些（实测首字节
+    /// 160 ms，尚有余量），但重写次数下来了，屏幕上真正发生的变化反而更少。
     private func boundedPreviewCandidate(
-        maximumWords: Int = 28
+        maximumWords: Int = 40
     ) -> (sourceText: String, range: LiveAudioTimeRange) {
         let words = latestLiveSourceText
             .split(whereSeparator: \Character.isWhitespace)

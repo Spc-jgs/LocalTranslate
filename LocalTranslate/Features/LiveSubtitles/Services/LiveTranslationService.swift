@@ -470,7 +470,9 @@ public final class LiveTranslationService {
             think: false,
             options: .init(
                 temperature: 0,
-                numPredict: 64,
+                // 取词上界放到 40 个词之后，一段译文可能有六七十个中文字，
+                // 而中文大致一字一 token——64 会把长句的结尾直接截掉。
+                numPredict: 96,
                 numContext: 2_048
             ),
             keepAlive: AppSettings.keepAlive

@@ -9,7 +9,8 @@ struct LiveCaptionPagerTests {
         overlongPageWithoutPunctuationStillHasACeiling()
         ingestingTheSameSpanTwiceDoesNotDuplicate()
         plannerWindowsAlignWithPagerWordBoundaries()
-        print("LiveCaptionPagerTests: 6 passed")
+        pageHoldsAWindowPlusWhatIsSaidWhileItTranslates()
+        print("LiveCaptionPagerTests: 7 passed")
     }
 
     /// 这是这套东西存在的理由：planner 切走一段不该让主行缩水。
@@ -42,9 +43,9 @@ struct LiveCaptionPagerTests {
     /// 定稿迟迟不回来时，页面不能无限长——否则又要靠取词上界硬截，锚点重新漂。
     private static func overlongPageFallsBackToASemanticBoundary() {
         var pager = LiveCaptionPager()
-        let text = (0..<14).map { "w\($0)" }.joined(separator: " ")
+        let text = (0..<22).map { "w\($0)" }.joined(separator: " ")
             + " end, " + (0..<8).map { "t\($0)" }.joined(separator: " ")
-        pager.append(finalizedSpans: [span(text, start: 0, duration: 23)])
+        pager.append(finalizedSpans: [span(text, start: 0, duration: 31)])
         expect(
             pager.wordCount <= LiveCaptionPager.maximumPageWords,
             "超长页面没有被裁到上界内，实得 \(pager.wordCount) 词"
@@ -57,8 +58,8 @@ struct LiveCaptionPagerTests {
 
     private static func overlongPageWithoutPunctuationStillHasACeiling() {
         var pager = LiveCaptionPager()
-        let text = (0..<60).map { "w\($0)" }.joined(separator: " ")
-        pager.append(finalizedSpans: [span(text, start: 0, duration: 60)])
+        let text = (0..<80).map { "w\($0)" }.joined(separator: " ")
+        pager.append(finalizedSpans: [span(text, start: 0, duration: 80)])
         expect(
             pager.wordCount == LiveCaptionPager.maximumPageWords,
             "没有标点时上界失效了，实得 \(pager.wordCount) 词"
@@ -125,6 +126,28 @@ struct LiveCaptionPagerTests {
         expect(
             rebuilt == normalized,
             "窗口拼回来和原文对不上：\(rebuilt)"
+        )
+    }
+
+    /// 页面上界要容得下「一个 planner 窗口 + 等它定稿回来这段时间新说的话」。
+    ///
+    /// 余量不够就会频繁裁剪，而裁剪和翻页不一样——它没有上一行更新配套，
+    /// 用户只看到主行内容凭空变短。实测余量只有 4 词时，229 秒里裁了 22 次、
+    /// 共 255 个词。
+    private static func pageHoldsAWindowPlusWhatIsSaidWhileItTranslates() {
+        var pager = LiveCaptionPager()
+        // planner 的窗口上界是 12 词，先攒满一个窗口的量。
+        let window = (0..<12).map { "w\($0)" }.joined(separator: " ")
+        pager.append(finalizedSpans: [span(window, start: 0, duration: 4)])
+
+        // 等这个窗口翻译回来的这几秒里又说了十个词。
+        let while_translating = (0..<10).map { "t\($0)" }.joined(separator: " ")
+        let trimmed = pager.append(
+            finalizedSpans: [span(while_translating, start: 4, duration: 3)]
+        )
+        expect(
+            trimmed == 0,
+            "一个窗口加十个词就触发了裁剪，说明留给定稿往返的余量不够：裁了 \(trimmed) 词"
         )
     }
 }

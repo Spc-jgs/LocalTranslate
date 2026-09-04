@@ -22,13 +22,19 @@ nonisolated struct LiveCaptionPager: Sendable {
         let range: LiveAudioTimeRange
     }
 
-    /// 一页最多攒多少词。超过就强制翻页到最近的边界。
+    /// 一页最多攒多少词。超过就裁到最近的边界。
     ///
-    /// 取 16 而不是贴着 `boundedPreviewCandidate` 的 28 词上界：主行实际送去
-    /// 翻译的是「这一页 + 还没定稿的 volatile」，volatile 常有十来个词。留不出
-    /// 这段余量，取词就会退回按词数硬截，锚点重新开始漂——上一轮
-    /// `anchor bounded=true` 频繁出现正是这个。
-    static let maximumPageWords = 16
+    /// 这个上界要容得下「一个 planner 窗口 + 等它定稿回来这段时间里新说的话」。
+    /// 原先取 16，只比 planner 的 `maximumWords`（12）多 4 词——而实测每 4.3 秒
+    /// 才定稿一次（229 秒 53 次），这期间正常语速要说十几个词，4 词的余量必然
+    /// 兜不住：229 秒里裁了 22 次、共 255 个词，翻页时页面词数顶在 16 的有 7 次，
+    /// 是分布里最多的一档。
+    ///
+    /// 裁剪和翻页不一样——它没有上一行更新配套，用户只看到主行内容凭空变短
+    /// （22 次里 16 次紧跟一个 replace，9 次主行直接短了平均 11 字）。
+    /// 24 词给定稿往返留出 12 词余量，同时仍在 `boundedPreviewCandidate`
+    /// 的取词上界之内。
+    static let maximumPageWords = 24
 
     private static let boundaryTerminators: Set<Character> = [
         ".", "?", "!", "。", "？", "！", ",", ";", ":", "，", "；", "："
