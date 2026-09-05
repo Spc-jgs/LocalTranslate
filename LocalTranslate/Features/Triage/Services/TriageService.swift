@@ -159,8 +159,19 @@ nonisolated struct TriageService: Sendable {
         )
     }
 
+    /// 上下文取不到时，明确告诉模型这是**采集链路**的限制，而不是页面上真的
+    /// 没有前后文。不说清楚，模型会把「上下文为空」当成结论写进解释里——那句话
+    /// 对用户毫无用处，他要的是这个词什么意思。
     private static func userMessage(_ context: SelectionContext) -> String {
         let surrounding = trim(context.adjacentText, maximumCharacters: 1_000)
+        guard !surrounding.isEmpty else {
+            return """
+                <selected>
+                \(trim(context.selectedText, maximumCharacters: 200))
+                </selected>
+                <context unavailable="true"/>
+                """
+        }
         return """
             <selected>
             \(trim(context.selectedText, maximumCharacters: 200))
@@ -201,6 +212,8 @@ nonisolated struct TriageService: Sendable {
         当上下文足以唯一确定普通或技术词义，而且只需稳定常识就能解释时，输出 route=enough。即使不知道端点实现、容器配置、文章类型或完整业务背景，也不影响解释“幂等、端口、草稿”这些上下文中已经明确的词义。route=enough 的 explanation 只准忠实转述上下文已给出的含义，不补充上下文没写的机制，也不把它偷换成相邻概念。
 
         只有词义本身仍多义，或用户实际询问的是实体身份、版本年份、当前/最新状态、精确外部数字、安全漏洞事实、法律医疗金融结论时，才输出 route=escalate。绝不编造或列举缩写展开、产品身份、日期、版本、额度或数字。route=escalate 时，只复述上下文明确提供的类型和缺口；不得推断事件尚未发生、实体不存在或当前状态如何。
+
+        context 标为 unavailable 时，说明本机没能从这个 App 读到前后文，不是页面上没有前后文。这时不要把“上下文为空”写进 explanation——那不是用户想知道的事。选区本身是一个含义稳定的常用词或术语时照常解释并输出 route=enough；选区确实多义、离开上下文无法确定时才 escalate，并在 uncertainty_reason 里写明它可能的几类用法差异，不要列举具体展开。
 
         explanation 用中文，最多三句、120 个汉字；uncertainty_reason 只在 escalate 时填写并具体说明缺什么。不要输出置信度百分比。只输出符合 schema 的 JSON。
         """

@@ -67,6 +67,14 @@ struct TriageView: View {
                         )
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
+
+                        // 采集链路够不到这个 App 时，把可操作的那一步说出来：
+                        // 多选一句是用户一秒钟就能做的事，比一句「上下文为空」有用。
+                        if context.captureQuality == .selectionOnly {
+                            Text("没读到上下文——多选一整句会让解释更准")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.orange.opacity(0.85))
+                        }
                     }
                 }
 
