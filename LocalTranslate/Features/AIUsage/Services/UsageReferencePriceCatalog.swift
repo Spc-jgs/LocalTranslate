@@ -54,6 +54,21 @@ nonisolated enum UsageReferencePriceCatalog {
         }
     }
 
+    /// 价目表的修订号。**改动任何单价、新增任何模型都要 +1。**
+    ///
+    /// 事件的费用在入库时就算好并固化在 SQLite 里，价目表后来变了，已入库的行
+    /// 不会自己更新。补了 gpt-6-astra 的单价却忘了动 Codex 的 parserVersion，
+    /// 结果就是那 12 条记录一直挂着 NULL，表里显示成一个没有金额的破折号——
+    /// 价格明明已经收录了。把这个号并进每个算费用的解析器的 parserVersion，
+    /// 加一条单价就自动触发重扫，而不是靠人记得同时改四个数字。
+    static let revision = 1
+
+    /// 算费用的解析器用它组合版本号：解析逻辑自身的版本 × 1000 + 价目修订号。
+    /// 两者任一变化都让 `unchanged` 判定失配，从而重扫并覆盖旧事件。
+    static func pricedParserVersion(_ parserBaseVersion: Int) -> Int {
+        parserBaseVersion * 1_000 + revision
+    }
+
     private static func date(_ iso8601UTC: String) -> Date {
         let formatter = ISO8601DateFormatter()
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -208,11 +223,18 @@ nonisolated enum UsageReferencePriceCatalog {
         provider: ProviderKind,
         now: Date = Date()
     ) -> UsageCostAvailability {
+        if isUnidentifiedModel(modelID) { return .unknownModel }
         if quotaBilledProviders.contains(provider) { return .quotaBilled }
         guard let schedule = schedule(modelID: modelID, provider: provider) else {
             return .unlistedModel
         }
         return current(in: schedule, now: now) == nil ? .expiredRate : .priced
+    }
+
+    /// 解析器拿不到模型身份时发出的占位 ID。这不是「价目表缺了一条」，而是
+    /// 不知道该查哪一条；写成「未收录单价」会让人以为补个价格就能修好。
+    private static func isUnidentifiedModel(_ modelID: String) -> Bool {
+        modelID.hasSuffix("-unknown") || modelID == "agy-activity-estimate"
     }
 
     /// 百炼只暴露 Credits 与额度，没有可换算的官方 Token 单价；不从 Token
@@ -325,6 +347,7 @@ nonisolated enum UsageCostAvailability: String, Sendable {
     case priced
     case quotaBilled
     case unlistedModel
+    case unknownModel
     case expiredRate
 
     var localizedCaption: String {
@@ -332,6 +355,7 @@ nonisolated enum UsageCostAvailability: String, Sendable {
         case .priced: return ""
         case .quotaBilled: return "按额度计费"
         case .unlistedModel: return "未收录单价"
+        case .unknownModel: return "模型未知"
         case .expiredRate: return "单价已过期"
         }
     }

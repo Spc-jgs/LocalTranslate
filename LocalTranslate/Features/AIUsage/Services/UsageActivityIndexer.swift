@@ -340,7 +340,8 @@ private nonisolated struct CodexCursor: Codable {
 }
 
 private nonisolated struct CodexIncrementalIndexer {
-    static let parserVersion = 1
+    static let parserVersion =
+        UsageReferencePriceCatalog.pricedParserVersion(1)
     static let interestingPatterns = [
         Data("\"session_meta\"".utf8),
         Data("\"turn_context\"".utf8),
@@ -618,7 +619,8 @@ private nonisolated struct CodexIncrementalIndexer {
 }
 
 private nonisolated struct GrokIncrementalIndexer {
-    static let parserVersion = 5
+    static let parserVersion =
+        UsageReferencePriceCatalog.pricedParserVersion(5)
     static let target = Data("turn_completed".utf8)
     static let turnStartedTarget = Data("turn_started".utf8)
 
@@ -986,7 +988,8 @@ private nonisolated enum LocalJSONLUsageSource {
 
     var parserVersion: Int {
         switch self {
-        case .claude: 3
+        // Claude 侧算参考费用，价目改动必须让它重扫；Qwen 只读 Token，不受影响。
+        case .claude: UsageReferencePriceCatalog.pricedParserVersion(3)
         case .qwen: 1
         }
     }
@@ -1299,7 +1302,8 @@ private nonisolated func agyProgressCallback(
 }
 
 private nonisolated struct AGYIncrementalIndexer {
-    static let parserVersion = 7
+    static let parserVersion =
+        UsageReferencePriceCatalog.pricedParserVersion(7)
     static let rowsPerDatabase = 10_000
     static let totalRowLimit = 50_000
 

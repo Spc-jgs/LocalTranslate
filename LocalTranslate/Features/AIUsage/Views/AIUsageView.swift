@@ -320,7 +320,7 @@ struct AIUsageView: View {
             )
             .dashboardCard()
 
-            Text("Claude、Codex、Gemini 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。「未收录单价」是本机价目表还没有该模型的官方单价，不是免费；「单价已过期」指官方促销价已到期而后继单价尚未公布；「按额度计费」指该来源只暴露 Credits，费用不从 Token 反推。")
+            Text("Claude、Codex、Gemini 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。「未收录单价」是本机价目表还没有该模型的官方单价，不是免费；「模型未知」指日志没给出模型身份，无从查价；「单价已过期」指官方促销价已到期而后继单价尚未公布；「按额度计费」指该来源只暴露 Credits，费用不从 Token 反推。")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
         }
@@ -1114,8 +1114,9 @@ private struct ModelBreakdownTable: View {
             modelID: row.modelID,
             provider: row.provider
         )
-        // 有单价却算不出金额，只可能是这一档里有事件没带上费用。
-        return availability == .priced ? "部分缺失" : availability.localizedCaption
+        // 有单价却算不出金额，说明这一档里还有事件没带费用——通常是价目更新后
+        // 索引正在重扫。写「部分缺失」在一条都还没补上时是错的。
+        return availability == .priced ? "费用待补齐" : availability.localizedCaption
     }
 
     private var tableHeader: some View {

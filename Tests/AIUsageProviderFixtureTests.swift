@@ -797,6 +797,29 @@ struct AIUsageProviderFixtureTests {
                 && UsageCostAvailability.unlistedModel.localizedCaption != "无费用",
             "Missing prices still read as zero cost"
         )
+        // 占位 ID 不是「价目缺一条」，补价格修不好它。
+        for placeholder in ["agy-unknown", "claude-unknown", "agy-activity-estimate"] {
+            expect(
+                UsageReferencePriceCatalog.availability(
+                    modelID: placeholder,
+                    provider: .google,
+                    now: before
+                ) == .unknownModel,
+                "Placeholder model id was not reported as unidentified"
+            )
+        }
+        // 价目修订号必须参与 parserVersion：忘了它，新加的单价就只对新事件生效，
+        // 已入库的行永远挂着 NULL。
+        expect(
+            UsageReferencePriceCatalog.pricedParserVersion(1)
+                != UsageReferencePriceCatalog.pricedParserVersion(2),
+            "Parser base version stopped distinguishing parsers"
+        )
+        expect(
+            UsageReferencePriceCatalog.pricedParserVersion(1)
+                != 1_000 * 1 + UsageReferencePriceCatalog.revision - 1,
+            "Catalog revision is not folded into the parser version"
+        )
     }
 
     /// 官方公布的形式是「到某日为止 X，之后 Y」。压成一个数就会在换挡当天

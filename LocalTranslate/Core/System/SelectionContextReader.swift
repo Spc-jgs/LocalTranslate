@@ -287,13 +287,14 @@ nonisolated enum SelectionContextReader {
     }
 
     /// 焦点常常落在网页里的具体节点上，而 marker 属性挂在它上层的 web area。
-    /// 往上找有限几层，找不到就放弃——不遍历整棵树。
+    /// 往上找有限几层，找不到就放弃——不遍历整棵树。选区落在链接、输入框或
+    /// 嵌套容器里时父链会长一些，所以留到 8 层；每层只是一次 AX 取值。
     private static func markerCapableElement(
         startingAt element: AXUIElement
     ) -> AXUIElement? {
         var current: AXUIElement? = element
         var depth = 0
-        while let candidate = current, depth < 4 {
+        while let candidate = current, depth < 8 {
             if copyAttribute(candidate, selectedTextMarkerRangeAttribute) != nil {
                 return candidate
             }
