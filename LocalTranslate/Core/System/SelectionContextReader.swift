@@ -16,11 +16,54 @@ nonisolated struct SelectionContext: Equatable, Sendable {
         }
     }
 
+    /// 上下文是从哪条链路拿到的。四条链路的覆盖面完全不同，而「读不到上下文」
+    /// 过去只表现为一句笼统的提示，看不出是哪一段断了。把它摆到气泡上，
+    /// 换个 App 试一次就知道该修哪条链路——这比事后猜要快得多。
+    enum CaptureSource: String, Sendable {
+        case nativeTextRange
+        case webTextMarker
+        case selectionOnly
+        case clipboard
+
+        var localizedTitle: String {
+            switch self {
+            case .nativeTextRange: return "原生文本"
+            case .webTextMarker: return "网页文本"
+            case .selectionOnly: return "无上下文接口"
+            case .clipboard: return "复制兜底"
+            }
+        }
+    }
+
     let selectedText: String
     let before: String
     let after: String
     let sourceApp: String?
     let captureQuality: CaptureQuality
+    let captureSource: CaptureSource
+
+    init(
+        selectedText: String,
+        before: String,
+        after: String,
+        sourceApp: String?,
+        captureQuality: CaptureQuality,
+        captureSource: CaptureSource? = nil
+    ) {
+        self.selectedText = selectedText
+        self.before = before
+        self.after = after
+        self.sourceApp = sourceApp
+        self.captureQuality = captureQuality
+        self.captureSource = captureSource
+            ?? (captureQuality == .surroundingText
+                ? .nativeTextRange
+                : .selectionOnly)
+    }
+
+    var captureSummary: String {
+        "\(captureQuality.localizedTitle) · \(captureSource.localizedTitle)"
+    }
 
     var surroundingText: String {
         [before, selectedText, after]
@@ -57,40 +100,70 @@ nonisolated enum SelectionContextReader {
             before: "",
             after: "",
             sourceApp: sourceApp,
-            captureQuality: .selectionOnly
+            captureQuality: .selectionOnly,
+            captureSource: .clipboard
         )
     }
 
+    /// 两条上下文链路，覆盖面互不重叠：
+    ///
+    /// - `AXSelectedTextRange` + `AXStringForRange` 是 AppKit 文本控件的接口，
+    ///   备忘录、Xcode、TextEdit 走这条；
+    /// - WebKit 与 Chromium 的网页正文**不实现**上面那组属性，它们把位置表达成
+    ///   text marker，取文字要走 `AXStringForTextMarkerRange`。
+    ///
+    /// 只实现前者，等于在浏览器和 PDF 里——也就是实际读东西的地方——永远拿不到
+    /// 上下文。两条都失败时才退回只有选区的降级态。
     private static func readUsingAccessibility(sourceApp: String?) -> SelectionContext? {
         guard AXIsProcessTrusted(), let focused = focusedElement(),
               let selected = selectedText(from: focused) else { return nil }
-        guard let range = selectedRange(from: focused),
-              let totalLength = numberOfCharacters(in: focused),
-              let expanded = expandedText(
-                  from: focused,
-                  selectedRange: range,
-                  totalLength: totalLength
-              ) else {
+
+        if let parts = nativeSurroundingText(from: focused) {
             return SelectionContext(
                 selectedText: selected,
-                before: "",
-                after: "",
+                before: parts.before,
+                after: parts.after,
                 sourceApp: sourceApp,
-                captureQuality: .selectionOnly
+                captureQuality: .surroundingText,
+                captureSource: .nativeTextRange
             )
         }
 
-        let parts = split(
+        if let parts = webSurroundingText(from: focused, selected: selected) {
+            return SelectionContext(
+                selectedText: selected,
+                before: parts.before,
+                after: parts.after,
+                sourceApp: sourceApp,
+                captureQuality: .surroundingText,
+                captureSource: .webTextMarker
+            )
+        }
+
+        return SelectionContext(
+            selectedText: selected,
+            before: "",
+            after: "",
+            sourceApp: sourceApp,
+            captureQuality: .selectionOnly,
+            captureSource: .selectionOnly
+        )
+    }
+
+    private static func nativeSurroundingText(
+        from element: AXUIElement
+    ) -> (before: String, after: String)? {
+        guard let range = selectedRange(from: element),
+              let totalLength = numberOfCharacters(in: element),
+              let expanded = expandedText(
+                  from: element,
+                  selectedRange: range,
+                  totalLength: totalLength
+              ) else { return nil }
+        return split(
             expanded.text,
             selectedLocation: range.location - expanded.range.location,
             selectedLength: range.length
-        )
-        return SelectionContext(
-            selectedText: selected,
-            before: parts?.before ?? "",
-            after: parts?.after ?? "",
-            sourceApp: sourceApp,
-            captureQuality: parts == nil ? .selectionOnly : .surroundingText
         )
     }
 
@@ -169,6 +242,126 @@ nonisolated enum SelectionContextReader {
         ) == .success,
         let text = result as? String else { return nil }
         return (text, range)
+    }
+
+    // MARK: - WebKit / Chromium text markers
+
+    // 这组属性不在公开 SDK 里，只能按名字取；WebKit 与 Chromium 都实现它们。
+    // 每一步都判定返回码，缺任何一环就整条链路让位给降级态——不猜、不硬转。
+    private static let selectedTextMarkerRangeAttribute = "AXSelectedTextMarkerRange"
+    private static let startMarkerForRangeAttribute =
+        "AXStartTextMarkerForTextMarkerRange"
+    private static let paragraphRangeForMarkerAttribute =
+        "AXParagraphTextMarkerRangeForTextMarker"
+    private static let stringForMarkerRangeAttribute = "AXStringForTextMarkerRange"
+
+    /// 用选区所在的**自然段**作为上下文单位。段落既是词义消歧真正需要的范围，
+    /// 也省掉了逐个 marker 前后挪 400 次的往返——那样每次分诊都要几百次跨进程
+    /// AX 调用，在阅读场景里会明显卡顿。
+    private static func webSurroundingText(
+        from element: AXUIElement,
+        selected: String
+    ) -> (before: String, after: String)? {
+        guard let host = markerCapableElement(startingAt: element),
+              let selectedRange = copyAttribute(
+                  host,
+                  selectedTextMarkerRangeAttribute
+              ),
+              let startMarker = copyParameterizedAttribute(
+                  host,
+                  startMarkerForRangeAttribute,
+                  selectedRange
+              ),
+              let paragraphRange = copyParameterizedAttribute(
+                  host,
+                  paragraphRangeForMarkerAttribute,
+                  startMarker
+              ),
+              let paragraph = copyParameterizedAttribute(
+                  host,
+                  stringForMarkerRangeAttribute,
+                  paragraphRange
+              ) as? String else { return nil }
+
+        return locate(selected, in: paragraph)
+    }
+
+    /// 焦点常常落在网页里的具体节点上，而 marker 属性挂在它上层的 web area。
+    /// 往上找有限几层，找不到就放弃——不遍历整棵树。
+    private static func markerCapableElement(
+        startingAt element: AXUIElement
+    ) -> AXUIElement? {
+        var current: AXUIElement? = element
+        var depth = 0
+        while let candidate = current, depth < 4 {
+            if copyAttribute(candidate, selectedTextMarkerRangeAttribute) != nil {
+                return candidate
+            }
+            current = parent(of: candidate)
+            depth += 1
+        }
+        return nil
+    }
+
+    private static func parent(of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXParentAttribute as CFString,
+            &value
+        ) == .success,
+        let value,
+        CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeDowncast(value, to: AXUIElement.self)
+    }
+
+    private static func copyAttribute(
+        _ element: AXUIElement,
+        _ name: String
+    ) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            name as CFString,
+            &value
+        ) == .success else { return nil }
+        return value
+    }
+
+    private static func copyParameterizedAttribute(
+        _ element: AXUIElement,
+        _ name: String,
+        _ parameter: CFTypeRef
+    ) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element,
+            name as CFString,
+            parameter,
+            &value
+        ) == .success else { return nil }
+        return value
+    }
+
+    /// 段落文字里定位选区。同一段出现多次时取第一次——before/after 只作上下文，
+    /// 取错一次的代价远小于整条链路退化成没有上下文。选区本身另有字段承载，
+    /// 所以这里只需要它两侧的文字。
+    static func locate(
+        _ selected: String,
+        in paragraph: String
+    ) -> (before: String, after: String)? {
+        let normalizedSelection = selected.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !normalizedSelection.isEmpty else { return nil }
+        let text = paragraph as NSString
+        let found = text.range(of: normalizedSelection)
+        guard found.location != NSNotFound else { return nil }
+        return split(
+            paragraph,
+            selectedLocation: found.location,
+            selectedLength: found.length
+        )
     }
 
     static func split(

@@ -61,7 +61,7 @@ struct TriageView: View {
                         Text(context.selectedText)
                             .font(.system(size: 13, weight: .semibold))
                         Text(
-                            [context.sourceApp, context.captureQuality.localizedTitle]
+                            [context.sourceApp, context.captureSummary]
                                 .compactMap { $0 }
                                 .joined(separator: " · ")
                         )

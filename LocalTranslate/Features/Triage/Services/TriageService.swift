@@ -80,15 +80,21 @@ nonisolated struct TriageService: Sendable {
         }
     }
 
+    /// 规则命中不再一律短路。只有 `blocks` 那几条——选区是 commit/CVE 这类
+    /// 本地只能编的标识，或页面内容正在试图注入——才在调用模型之前返回；
+    /// 其余情况先拿到本地解释，再把核对提示挂上去。短路一切的旧行为让用户
+    /// 每次都只收到一句罐头文案，而这个功能的价值全在「解释够用」那一支。
     func evaluate(_ context: SelectionContext) async throws -> TriageDecision {
-        if let reason = TriageRiskPolicy.escalationReason(for: context) {
+        let finding = TriageRiskPolicy.finding(for: context)
+        if let finding, finding.handling == .blocks {
             return TriageDecision(
                 route: .escalate,
                 kind: .current,
                 explanation: "这类内容依赖特定资料或当前状态，本地气泡不直接下结论。",
-                uncertaintyReason: reason,
+                uncertaintyReason: finding.reason,
                 handoffQuestion: "请结合所附上下文核对准确含义、适用范围和时效。",
-                wasPolicyApplied: true
+                wasPolicyApplied: true,
+                withheldLocalExplanation: true
             )
         }
 
@@ -128,19 +134,28 @@ nonisolated struct TriageService: Sendable {
             maximumCharacters: 180
         )
         let question = Self.trim(model.handoffQuestion, maximumCharacters: 180)
+        // 附注类规则只能让结果更保守：可以把 enough 提成 escalate，
+        // 不能把模型已经判定的 escalate 降回 enough。
+        let route: TriageRoute = finding == nil ? model.route : .escalate
+        let uncertaintyText: String
+        if let finding {
+            uncertaintyText = finding.reason
+        } else if model.route == .escalate && uncertainty.isEmpty {
+            uncertaintyText = "现有上下文不足以支持可靠结论。"
+        } else {
+            uncertaintyText = uncertainty
+        }
         return TriageDecision(
-            route: model.route,
+            route: route,
             kind: model.kind,
             explanation: explanation.isEmpty
                 ? "本地模型没有生成可用的简短解释。"
                 : explanation,
-            uncertaintyReason: model.route == .escalate && uncertainty.isEmpty
-                ? "现有上下文不足以支持可靠结论。"
-                : uncertainty,
+            uncertaintyReason: uncertaintyText,
             handoffQuestion: question.isEmpty
                 ? "请结合上下文核对这个词的准确含义，并指出本地解释是否有误。"
                 : question,
-            wasPolicyApplied: false
+            wasPolicyApplied: finding != nil
         )
     }
 
