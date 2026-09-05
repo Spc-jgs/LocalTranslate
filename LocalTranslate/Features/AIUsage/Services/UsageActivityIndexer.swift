@@ -1299,7 +1299,7 @@ private nonisolated func agyProgressCallback(
 }
 
 private nonisolated struct AGYIncrementalIndexer {
-    static let parserVersion = 6
+    static let parserVersion = 7
     static let rowsPerDatabase = 10_000
     static let totalRowLimit = 50_000
 
@@ -1653,6 +1653,14 @@ private nonisolated struct AGYIncrementalIndexer {
                 turns = 0
                 eventKey = "model-evidence::\(modelID)"
             }
+            // 零 Token 的模型证据行不带费用：那不是「这次免费」，而是用量还
+            // 没落盘，算出来的 0 会混进汇总当成真值。
+            let cost = usage.totalTokens > 0
+                ? UsageReferencePriceCatalog.estimateGemini(
+                    modelID: modelID,
+                    usage: usage
+                )
+                : nil
             events.append(
                 IndexedUsageEvent(
                     eventKey: eventKey,
@@ -1660,8 +1668,8 @@ private nonisolated struct AGYIncrementalIndexer {
                     modelID: modelID,
                     usage: usage,
                     turns: turns,
-                    costUSD: nil,
-                    costKind: nil
+                    costUSD: cost,
+                    costKind: cost == nil ? nil : .estimated
                 )
             )
         }

@@ -320,7 +320,7 @@ struct AIUsageView: View {
             )
             .dashboardCard()
 
-            Text("Codex、Claude 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。「未收录单价」是本机价目表还没有该模型的官方单价，不是免费；「按额度计费」指该来源只暴露订阅额度或 Credits，费用不从 Token 反推。")
+            Text("Claude、Codex、Gemini 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。「未收录单价」是本机价目表还没有该模型的官方单价，不是免费；「单价已过期」指官方促销价已到期而后继单价尚未公布；「按额度计费」指该来源只暴露 Credits，费用不从 Token 反推。")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
         }
@@ -492,7 +492,7 @@ private struct UsageHeadlineCard: View {
                 }
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
-                .help("Codex、Claude 与 Grok 为标准 API 等价参考，Grok 日志费用优先；都不代表订阅账单。百炼不估算 Credits。")
+                .help("Claude、Codex、Gemini 与 Grok 为标准 API 等价参考，Grok 日志费用优先；都不代表订阅账单。百炼不估算 Credits。")
             }
         }
         .padding(16)

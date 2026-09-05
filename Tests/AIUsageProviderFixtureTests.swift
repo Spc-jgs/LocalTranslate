@@ -20,8 +20,9 @@ struct AIUsageProviderFixtureTests {
         codexServerDailyOverridesOverlappingLocalHistory()
         referencePriceCatalogMatchesPublishedRates()
         costAvailabilityExplainsMissingPrices()
+        datedRatesSwitchInsteadOfVanishing()
         try await corruptIndexIsQuarantinedAndRebuilt()
-        print("AIUsageProviderFixtureTests: 17 passed")
+        print("AIUsageProviderFixtureTests: 18 passed")
     }
 
     private static func codexUnchangedAndAppendAreIncremental() async throws {
@@ -772,13 +773,21 @@ struct AIUsageProviderFixtureTests {
                 modelID: "gpt-6-astra",
                 provider: .openAI,
                 now: before
+            ) == .priced,
+            "GPT-6 Astra list price was not applied"
+        )
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gpt-7-nobody-published-this",
+                provider: .openAI,
+                now: before
             ) == .unlistedModel,
             "Unlisted OpenAI model was not reported as unlisted"
         )
         expect(
             UsageReferencePriceCatalog.availability(
-                modelID: "gemini-3.8-flash",
-                provider: .google,
+                modelID: "qwen3-max",
+                provider: .alibaba,
                 now: before
             ) == .quotaBilled,
             "Quota-billed provider was not reported as quota billed"
@@ -787,6 +796,71 @@ struct AIUsageProviderFixtureTests {
             UsageCostAvailability.quotaBilled.localizedCaption != "无费用"
                 && UsageCostAvailability.unlistedModel.localizedCaption != "无费用",
             "Missing prices still read as zero cost"
+        )
+    }
+
+    /// 官方公布的形式是「到某日为止 X，之后 Y」。压成一个数就会在换挡当天
+    /// 悄悄算错；档位排完还没有后继单价时才算过期。
+    private static func datedRatesSwitchInsteadOfVanishing() {
+        let usage = TokenBreakdown(
+            inputTokens: 1_000_000,
+            outputTokens: 100_000,
+            cachedReadTokens: 400_000
+        )
+        let switchover = Date(timeIntervalSince1970: 1_798_761_600)
+        let promotional = UsageReferencePriceCatalog.estimateGemini(
+            modelID: "gemini-3.8-flash",
+            usage: usage,
+            now: switchover.addingTimeInterval(-1)
+        )
+        // 600_000 fresh × 0.75 + 400_000 × 0.075 + 100_000 × 3.75，单位百万。
+        expect(
+            abs((promotional ?? 0) - 0.855) < 0.000_001,
+            "Gemini promotional rate is wrong"
+        )
+        let standard = UsageReferencePriceCatalog.estimateGemini(
+            modelID: "gemini-3.8-flash",
+            usage: usage,
+            now: switchover
+        )
+        expect(
+            abs((standard ?? 0) - 1.71) < 0.000_001,
+            "Gemini rate did not switch to the published follow-on price"
+        )
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gemini-3.8-flash",
+                provider: .google,
+                now: switchover
+            ) == .priced,
+            "Gemini was reported expired even though a follow-on rate exists"
+        )
+        // AGY 的变体后缀必须落到同一张单价上，不能静默无价。
+        expect(
+            UsageReferencePriceCatalog.estimateGemini(
+                modelID: "gemini-3.8-flash-tiered",
+                usage: usage,
+                now: switchover
+            ) == standard,
+            "Gemini variant suffix lost its rate"
+        )
+
+        // gpt-6-astra：短上下文 $10 / $1 / $50，超过 272K 输入与缓存 ×2、输出 ×1.5。
+        let astraShort = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-6-astra",
+            usage: TokenBreakdown(inputTokens: 100_000, outputTokens: 10_000)
+        )
+        expect(
+            abs((astraShort ?? 0) - 1.5) < 0.000_001,
+            "GPT-6 Astra short-context price is wrong"
+        )
+        let astraLong = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-6-astra",
+            usage: TokenBreakdown(inputTokens: 300_000, outputTokens: 10_000)
+        )
+        expect(
+            abs((astraLong ?? 0) - 6.75) < 0.000_001,
+            "GPT-6 Astra long-context surcharge is wrong"
         )
     }
 

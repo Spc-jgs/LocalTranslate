@@ -1,8 +1,13 @@
 import Foundation
 
-/// 参考费用的单一出处：Anthropic、OpenAI（Codex）与 xAI 的官方标准 API 单价，
-/// 以及「这个模型为什么没有费用」的判定。价目分散会让两侧各自漂移，
+/// 参考费用的单一出处：Anthropic、OpenAI（Codex）、Google 与 xAI 的官方标准
+/// API 单价，以及「这个模型为什么没有费用」的判定。价目分散会让两侧各自漂移，
 /// 也会让 UI 只剩下一个无从解释的破折号。
+///
+/// 每个模型持有一串**按时间排列的单价档**，而不是一个数。官方公布的形式本来
+/// 就是「到某日为止 X，之后 Y」；把它压成一个数，要么在涨价当天悄悄算错，
+/// 要么在促销结束当天整列变空。全部档位都过期说明官方还没公布后继单价，
+/// 那时不猜——这是 AGENTS.md 的「不从 Token 反推」在时间轴上的同一条规则。
 nonisolated enum UsageReferencePriceCatalog {
     private struct Price {
         let inputPerMillion: Double
@@ -10,7 +15,7 @@ nonisolated enum UsageReferencePriceCatalog {
         let cacheWritePerMillion: Double
         let outputPerMillion: Double
         let longContext: LongContextPrice?
-        /// 促销价这类有时效的单价到期后不再换算，也不静默沿用。
+        /// 这一档的截止时刻；`nil` 表示官方没有给它设终点。
         let validBefore: Date?
 
         init(
@@ -49,53 +54,92 @@ nonisolated enum UsageReferencePriceCatalog {
         }
     }
 
+    private static func date(_ iso8601UTC: String) -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        // 价目表里的日期都是写死的常量；解析不出来是编码错误，不是运行期条件。
+        guard let value = formatter.date(from: iso8601UTC) else {
+            preconditionFailure("价目表日期无法解析：\(iso8601UTC)")
+        }
+        return value
+    }
+
+    // MARK: - Anthropic
+
     // Anthropic standard global API list prices checked on 2026-08-30.
-    private static let claudePrices: [String: Price] = [
-        "claude-opus-5": Price(5, 0.5, 6.25, 25),
-        "claude-opus-4-8": Price(5, 0.5, 6.25, 25),
-        "claude-opus-4-7": Price(5, 0.5, 6.25, 25),
-        "claude-opus-4-6": Price(5, 0.5, 6.25, 25),
-        "claude-opus-4-5": Price(5, 0.5, 6.25, 25),
-        "claude-sonnet-5": Price(2, 0.2, 2.5, 10),
-        "claude-sonnet-4-6": Price(3, 0.3, 3.75, 15),
-        "claude-sonnet-4-5": Price(3, 0.3, 3.75, 15),
-        "claude-haiku-4-5": Price(1, 0.1, 1.25, 5)
+    private static let claudePrices: [String: [Price]] = [
+        "claude-opus-5": [Price(5, 0.5, 6.25, 25)],
+        "claude-opus-4-8": [Price(5, 0.5, 6.25, 25)],
+        "claude-opus-4-7": [Price(5, 0.5, 6.25, 25)],
+        "claude-opus-4-6": [Price(5, 0.5, 6.25, 25)],
+        "claude-opus-4-5": [Price(5, 0.5, 6.25, 25)],
+        "claude-sonnet-5": [Price(2, 0.2, 2.5, 10)],
+        "claude-sonnet-4-6": [Price(3, 0.3, 3.75, 15)],
+        "claude-sonnet-4-5": [Price(3, 0.3, 3.75, 15)],
+        "claude-haiku-4-5": [Price(1, 0.1, 1.25, 5)]
     ]
+
+    // MARK: - xAI
 
     // xAI standard API list prices checked on 2026-08-30. Grok Build's
     // `-build` suffix is normalized to the matching public API model.
-    private static let grokPrices: [String: Price] = [
-        "grok-4.6": Price(
-            2,
-            0.5,
-            2,
-            6,
-            longContext: LongContextPrice(200_000, 4, 1, 12)
-        ),
-        "grok-4.5": Price(
-            2,
-            0.3,
-            2,
-            6,
-            longContext: LongContextPrice(200_000, 4, 0.6, 12)
-        )
+    private static let grokPrices: [String: [Price]] = [
+        "grok-4.6": [
+            Price(2, 0.5, 2, 6, longContext: LongContextPrice(200_000, 4, 1, 12))
+        ],
+        "grok-4.5": [
+            Price(2, 0.3, 2, 6, longContext: LongContextPrice(200_000, 4, 0.6, 12))
+        ]
     ]
+
+    // MARK: - OpenAI (Codex)
 
     /// Promotional GPT-5.6 prices published by OpenAI and guaranteed through
-    /// 2026-11-21. After that the entry stays listed so the UI can say the rate
-    /// expired instead of pretending the model was never priced.
-    private static let codexPromotionEnd = Date(timeIntervalSince1970: 1_795_305_600)
+    /// 2026-11-21. OpenAI has not published the follow-on rate, so the schedule
+    /// ends there and the UI says the rate expired rather than inventing one.
+    /// Checked on 2026-09-05 against developers.openai.com/api/docs/pricing.
+    private static let codexPromotionEnd = date("2026-11-22T00:00:00Z")
 
-    private static let codexPrices: [String: Price] = [
-        "gpt-5.6": Price(4, 0.4, 5, 20, validBefore: codexPromotionEnd),
-        "gpt-5.6-sol": Price(4, 0.4, 5, 20, validBefore: codexPromotionEnd),
-        "gpt-5.6-terra": Price(2, 0.2, 2.5, 12, validBefore: codexPromotionEnd),
-        "gpt-5.6-luna": Price(0.2, 0.02, 0.25, 1.2, validBefore: codexPromotionEnd)
+    private static let codexPrices: [String: [Price]] = [
+        "gpt-5.6": [Price(4, 0.4, 5, 20, validBefore: codexPromotionEnd)],
+        "gpt-5.6-sol": [Price(4, 0.4, 5, 20, validBefore: codexPromotionEnd)],
+        "gpt-5.6-terra": [Price(2, 0.2, 2.5, 12, validBefore: codexPromotionEnd)],
+        "gpt-5.6-luna": [Price(0.2, 0.02, 0.25, 1.2, validBefore: codexPromotionEnd)],
+        // GPT-6 Astra standard API list price checked on 2026-09-05:
+        // $10 input / $1 cached / $12.50 cache write / $50 output, no end date.
+        "gpt-6-astra": [Price(10, 1, 12.5, 50)]
     ]
 
-    /// OpenAI 的长上下文加价与 Anthropic/xAI 不同：超过阈值后输入 ×2、输出 ×1.5，
-    /// 而不是换一张单价表。
+    /// OpenAI 的长上下文加价与 Anthropic/xAI 不同：超过阈值后输入与缓存 ×2、
+    /// 输出 ×1.5，而不是换一张单价表。gpt-5.6 与 gpt-6-astra 共用这个阈值。
     private static let codexLongContextThreshold: Int64 = 272_000
+
+    // MARK: - Google (Gemini)
+
+    /// Gemini 3.x Flash 的促销单价到 2026-12-31 为止，之后官方已经公布了翻倍后
+    /// 的价格，所以这里是两档而不是一个终点。Checked on 2026-09-05 against
+    /// ai.google.dev/gemini-api/docs/pricing.
+    private static let geminiPromotionEnd = date("2027-01-01T00:00:00Z")
+
+    /// Gemini 的上下文缓存不按写入 Token 计费，而是按存储小时收费，本机日志里
+    /// 也没有缓存写入 Token。没有可换算的量就记 0，不用别的费率顶替。
+    private static let geminiPrices: [String: [Price]] = [
+        "gemini-3.8-flash": [
+            Price(0.75, 0.075, 0, 3.75, validBefore: geminiPromotionEnd),
+            Price(1.5, 0.15, 0, 7.5)
+        ],
+        "gemini-3.7-flash": [
+            Price(0.75, 0.075, 0, 3.75, validBefore: geminiPromotionEnd),
+            Price(1.5, 0.15, 0, 7.5)
+        ],
+        "gemini-3.6-flash": [
+            Price(0.75, 0.075, 0, 3.75, validBefore: geminiPromotionEnd),
+            Price(1.5, 0.15, 0, 7.5)
+        ],
+        "gemini-3.5-flash": [Price(1.5, 0.15, 0, 9)]
+    ]
+
+    // MARK: - Estimates
 
     static func estimateClaude(
         modelID: String,
@@ -104,10 +148,9 @@ nonisolated enum UsageReferencePriceCatalog {
         now: Date = Date()
     ) -> Double? {
         estimate(
-            price: claudePrices[normalizedClaudeModelID(modelID)],
+            price: currentPrice(modelID, in: claudePrices, now: now),
             usage: usage,
-            oneHourCacheCreationTokens: oneHourCacheCreationTokens,
-            now: now
+            oneHourCacheCreationTokens: oneHourCacheCreationTokens
         )
     }
 
@@ -117,9 +160,19 @@ nonisolated enum UsageReferencePriceCatalog {
         now: Date = Date()
     ) -> Double? {
         estimate(
-            price: grokPrices[normalizedGrokModelID(modelID)],
-            usage: usage,
-            now: now
+            price: currentPrice(strippedGrokSuffix(modelID), in: grokPrices, now: now),
+            usage: usage
+        )
+    }
+
+    static func estimateGemini(
+        modelID: String,
+        usage: TokenBreakdown,
+        now: Date = Date()
+    ) -> Double? {
+        estimate(
+            price: currentPrice(modelID, in: geminiPrices, now: now),
+            usage: usage
         )
     }
 
@@ -128,11 +181,9 @@ nonisolated enum UsageReferencePriceCatalog {
         usage: TokenBreakdown,
         now: Date = Date()
     ) -> Double? {
-        guard let price = codexPrices[normalizedCodexModelID(modelID)] else {
+        guard let price = currentPrice(modelID, in: codexPrices, now: now) else {
             return nil
         }
-        if let validBefore = price.validBefore, now >= validBefore { return nil }
-
         let isLongContext = usage.inputTokens > codexLongContextThreshold
         let inputMultiplier = isLongContext ? 2.0 : 1.0
         let outputMultiplier = isLongContext ? 1.5 : 1.0
@@ -147,84 +198,92 @@ nonisolated enum UsageReferencePriceCatalog {
             * price.outputPerMillion * outputMultiplier
     }
 
-    /// 一行没有费用时，说明是哪一种「没有」。三种情况在账面上完全不同：
-    /// 来源按额度计费、单价没收录、收录过但已过期。UI 把它们都写成
-    /// 「无费用」会读成「这行不花钱」，而 Gemini 与 gpt-6-astra 都在花钱。
+    // MARK: - Availability
+
+    /// 一行没有金额时，说明是哪一种「没有」。三种情况在账面上完全不同：
+    /// 来源按额度计费、价目表没收录这个模型、收录过但所有单价档都已过期。
+    /// 统一写成「无费用」会被读成「这行不花钱」。
     static func availability(
         modelID: String,
         provider: ProviderKind,
         now: Date = Date()
     ) -> UsageCostAvailability {
-        guard let price = price(modelID: modelID, provider: provider) else {
-            return quotaBilledProviders.contains(provider)
-                ? .quotaBilled
-                : .unlistedModel
+        if quotaBilledProviders.contains(provider) { return .quotaBilled }
+        guard let schedule = schedule(modelID: modelID, provider: provider) else {
+            return .unlistedModel
         }
-        if let validBefore = price.validBefore, now >= validBefore {
-            return .expiredRate
-        }
-        return .priced
+        return current(in: schedule, now: now) == nil ? .expiredRate : .priced
     }
 
-    /// 这些来源在本机只暴露订阅额度或 Credits，没有可换算的官方 Token 单价；
-    /// 不从 Token 反推是 AGENTS.md 的既定约束。
-    private static let quotaBilledProviders: Set<ProviderKind> = [
-        .google, .alibaba
-    ]
+    /// 百炼只暴露 Credits 与额度，没有可换算的官方 Token 单价；不从 Token
+    /// 反推是 AGENTS.md 的既定约束。
+    private static let quotaBilledProviders: Set<ProviderKind> = [.alibaba]
 
-    private static func price(
+    private static func schedule(
         modelID: String,
         provider: ProviderKind
-    ) -> Price? {
+    ) -> [Price]? {
         switch provider {
         case .anthropic:
-            return claudePrices[normalizedClaudeModelID(modelID)]
+            return matched(modelID, in: claudePrices)
         case .xAI:
-            return grokPrices[normalizedGrokModelID(modelID)]
+            return matched(strippedGrokSuffix(modelID), in: grokPrices)
         case .openAI:
-            return codexPrices[normalizedCodexModelID(modelID)]
-        case .google, .alibaba:
+            return matched(modelID, in: codexPrices)
+        case .google:
+            return matched(modelID, in: geminiPrices)
+        case .alibaba:
             return nil
         }
     }
 
-    private static func normalizedClaudeModelID(_ modelID: String) -> String {
-        longestPrefixMatch(modelID, in: claudePrices) ?? modelID
-    }
+    // MARK: - Lookup
 
-    private static func normalizedGrokModelID(_ modelID: String) -> String {
-        let stripped = modelID.hasSuffix("-build")
+    private static func strippedGrokSuffix(_ modelID: String) -> String {
+        modelID.hasSuffix("-build")
             ? String(modelID.dropLast("-build".count))
             : modelID
-        return longestPrefixMatch(stripped, in: grokPrices) ?? stripped
     }
 
-    /// Codex 会话里的模型名带推理档位等后缀（`gpt-5.6-sol-high`），
-    /// 精确匹配会让它们静默无价。取最长前缀，避免 `gpt-5.6` 抢走
-    /// `gpt-5.6-luna` 的单价。
-    private static func normalizedCodexModelID(_ modelID: String) -> String {
-        longestPrefixMatch(modelID, in: codexPrices) ?? modelID
-    }
-
-    private static func longestPrefixMatch(
+    /// 会话日志里的模型名常带档位或变体后缀（`gpt-5.6-sol-high`、
+    /// `gemini-3.8-flash-tiered`），精确匹配会让它们静默无价。取最长前缀，
+    /// 免得 `gpt-5.6` 抢走 `gpt-5.6-luna` 的单价。
+    private static func matched(
         _ modelID: String,
-        in table: [String: Price]
-    ) -> String? {
-        var best: String?
-        for known in table.keys where modelID.hasPrefix(known) {
-            if best == nil || known.count > (best?.count ?? 0) { best = known }
+        in table: [String: [Price]]
+    ) -> [Price]? {
+        var best: (key: String, schedule: [Price])?
+        for (known, schedule) in table where modelID.hasPrefix(known) {
+            if best == nil || known.count > (best?.key.count ?? 0) {
+                best = (known, schedule)
+            }
         }
-        return best
+        return best?.schedule
+    }
+
+    private static func currentPrice(
+        _ modelID: String,
+        in table: [String: [Price]],
+        now: Date
+    ) -> Price? {
+        guard let schedule = matched(modelID, in: table) else { return nil }
+        return current(in: schedule, now: now)
+    }
+
+    /// 命中第一个尚未过期的档。档位按时间先后写在表里，所以线性扫描即可。
+    private static func current(in schedule: [Price], now: Date) -> Price? {
+        schedule.first { price in
+            guard let validBefore = price.validBefore else { return true }
+            return now < validBefore
+        }
     }
 
     private static func estimate(
         price: Price?,
         usage: TokenBreakdown,
-        oneHourCacheCreationTokens: Int64 = 0,
-        now: Date = Date()
+        oneHourCacheCreationTokens: Int64 = 0
     ) -> Double? {
         guard let price else { return nil }
-        if let validBefore = price.validBefore, now >= validBefore { return nil }
         let selected: (
             input: Double,
             cached: Double,
