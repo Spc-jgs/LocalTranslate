@@ -570,7 +570,10 @@ private nonisolated struct CodexIncrementalIndexer {
         )
         guard usage.totalTokens > 0 else { return nil }
 
-        let cost = CodexAPIPriceCatalog.estimate(modelID: cursor.model, usage: usage)
+        let cost = UsageReferencePriceCatalog.estimateCodex(
+            modelID: cursor.model,
+            usage: usage
+        )
         return IndexedUsageEvent(
             eventKey: String(endOffset),
             occurredAt: timestamp,

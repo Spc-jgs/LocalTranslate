@@ -19,8 +19,9 @@ struct AIUsageProviderFixtureTests {
         try await qwenUsageSummaryIsIncremental()
         codexServerDailyOverridesOverlappingLocalHistory()
         referencePriceCatalogMatchesPublishedRates()
+        costAvailabilityExplainsMissingPrices()
         try await corruptIndexIsQuarantinedAndRebuilt()
-        print("AIUsageProviderFixtureTests: 16 passed")
+        print("AIUsageProviderFixtureTests: 17 passed")
     }
 
     private static func codexUnchangedAndAppendAreIncremental() async throws {
@@ -720,6 +721,73 @@ struct AIUsageProviderFixtureTests {
             )
         )
         expect(abs((grok ?? 0) - 0.52) < 0.000_001, "Grok long-context price is wrong")
+
+        // 推理档位后缀不能让模型静默无价，且最长前缀不许被短条目抢走。
+        let usage = TokenBreakdown(inputTokens: 100_000, outputTokens: 10_000)
+        let sol = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-5.6-sol-high",
+            usage: usage
+        )
+        expect(abs((sol ?? 0) - 0.6) < 0.000_001, "Codex suffixed model lost its rate")
+        let luna = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-5.6-luna",
+            usage: usage
+        )
+        expect(abs((luna ?? 0) - 0.032) < 0.000_001, "Codex prefix match picked the wrong rate")
+    }
+
+    /// 没有金额时必须能说出是哪一种「没有」：促销单价过期、来源按额度计费、
+    /// 或价目表没有这个模型。三者在账面上完全不同。
+    private static func costAvailabilityExplainsMissingPrices() {
+        let promotion = Date(timeIntervalSince1970: 1_795_305_600)
+        let before = promotion.addingTimeInterval(-1)
+        let after = promotion.addingTimeInterval(1)
+
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gpt-5.6-sol",
+                provider: .openAI,
+                now: before
+            ) == .priced,
+            "Codex promotional rate was not treated as priced"
+        )
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gpt-5.6-sol",
+                provider: .openAI,
+                now: after
+            ) == .expiredRate,
+            "Expired Codex rate was not reported as expired"
+        )
+        expect(
+            UsageReferencePriceCatalog.estimateCodex(
+                modelID: "gpt-5.6-sol",
+                usage: TokenBreakdown(inputTokens: 1_000_000),
+                now: after
+            ) == nil,
+            "Expired Codex rate still produced an amount"
+        )
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gpt-6-astra",
+                provider: .openAI,
+                now: before
+            ) == .unlistedModel,
+            "Unlisted OpenAI model was not reported as unlisted"
+        )
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gemini-3.8-flash",
+                provider: .google,
+                now: before
+            ) == .quotaBilled,
+            "Quota-billed provider was not reported as quota billed"
+        )
+        expect(
+            UsageCostAvailability.quotaBilled.localizedCaption != "无费用"
+                && UsageCostAvailability.unlistedModel.localizedCaption != "无费用",
+            "Missing prices still read as zero cost"
+        )
     }
 
     private static func withFixture(

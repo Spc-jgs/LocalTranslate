@@ -320,7 +320,7 @@ struct AIUsageView: View {
             )
             .dashboardCard()
 
-            Text("Codex、Claude 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。百炼 Credits 不从 Token 反推；AGY 从本机会话库读取模型与 Token，暂不提供费用。")
+            Text("Codex、Claude 与 Grok 按官方标准 API 单价提供等价费用，Grok 有日志费用时优先采用日志值；这些都不代表订阅实际扣款，且不含工具调用费。「未收录单价」是本机价目表还没有该模型的官方单价，不是免费；「按额度计费」指该来源只暴露订阅额度或 Credits，费用不从 Token 反推。")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
         }
@@ -1104,11 +1104,18 @@ private struct ModelBreakdownTable: View {
         return max(0, min(1, Double(row.usage.totalTokens) / Double(maximum)))
     }
 
+    /// 没有金额时说明是哪一种「没有」：来源按额度计费、单价未收录、
+    /// 或收录过的促销单价已过期。统一写成「无费用」会被读成「这行不花钱」。
     private func costCaption(for row: ModelUsageRow) -> String {
-        guard let kind = row.costKind else {
-            return row.costUSD == nil ? "无费用" : ""
+        if let kind = row.costKind, row.costUSD != nil {
+            return kind == .estimated ? "估算" : "日志"
         }
-        return kind == .estimated ? "估算" : "日志"
+        let availability = UsageReferencePriceCatalog.availability(
+            modelID: row.modelID,
+            provider: row.provider
+        )
+        // 有单价却算不出金额，只可能是这一档里有事件没带上费用。
+        return availability == .priced ? "部分缺失" : availability.localizedCaption
     }
 
     private var tableHeader: some View {
