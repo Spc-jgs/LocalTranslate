@@ -53,9 +53,9 @@ private struct MenuBarContent: View {
             )
         }
 
-        Button("词义分诊 (⌥⇧E)") {
+        Button("本机助手 (⌥⇧E)") {
             NotificationCenter.default.post(
-                name: .triggerTriage,
+                name: .triggerAssistant,
                 object: nil
             )
         }
@@ -155,7 +155,7 @@ final class AppDelegate:
     private var miniHUDPanel:
         MiniHUDPanel?
 
-    private var triagePanel:
+    private var assistantPanel:
         MiniHUDPanel?
 
     private var hotKeyManager:
@@ -170,8 +170,8 @@ final class AppDelegate:
     private let miniHUDViewModel =
         MiniHUDViewModel()
 
-    private let triageViewModel =
-        TriageViewModel()
+    private let assistantViewModel =
+        AssistantViewModel()
 
     // MARK: - Launch
 
@@ -230,19 +230,19 @@ final class AppDelegate:
         self.miniHUDPanel =
             miniHUD
 
-        let triagePanel = MiniHUDPanel(
-            content: TriageView(
-                viewModel: triageViewModel,
+        let assistantPanel = MiniHUDPanel(
+            content: AssistantView(
+                viewModel: assistantViewModel,
                 onClose: { [weak self] in
-                    self?.triagePanel?.orderOut(nil)
+                    self?.assistantPanel?.orderOut(nil)
                 }
             ),
             initialSize: NSSize(width: 420, height: 350)
         )
-        triagePanel.onOrderOut = { [weak self] in
-            self?.triageViewModel.cancel()
+        assistantPanel.onOrderOut = { [weak self] in
+            self?.assistantViewModel.cancel()
         }
-        self.triagePanel = triagePanel
+        self.assistantPanel = assistantPanel
 
         observeContentSize()
         observeMiniHUDContentSize()
@@ -267,7 +267,7 @@ final class AppDelegate:
                         self?.handleMiniHUDHotKey()
                     },
                     .explainSelection: { [weak self] in
-                        self?.handleTriageHotKey()
+                        self?.handleAssistantHotKey()
                     }
                 ]
             )
@@ -342,8 +342,8 @@ final class AppDelegate:
         NotificationCenter.default
             .addObserver(
                 self,
-                selector: #selector(handleTriageNotification),
-                name: .triggerTriage,
+                selector: #selector(handleAssistantNotification),
+                name: .triggerAssistant,
                 object: nil
             )
     }
@@ -491,8 +491,8 @@ final class AppDelegate:
     }
 
     @objc
-    private func handleTriageNotification(_ notification: Notification) {
-        handleTriageHotKey()
+    private func handleAssistantNotification(_ notification: Notification) {
+        handleAssistantHotKey()
     }
 
     // MARK: - Live Subtitles HotKey
@@ -524,8 +524,8 @@ final class AppDelegate:
             return
         }
 
-        if let triagePanel, triagePanel.isVisible {
-            triagePanel.orderOut(nil)
+        if let assistantPanel, assistantPanel.isVisible {
+            assistantPanel.orderOut(nil)
         }
 
         if let selectedText = SelectedTextReader.read(),
@@ -538,19 +538,34 @@ final class AppDelegate:
         handleTranslateHotKey()
     }
 
-    private func handleTriageHotKey() {
-        guard SelectionContextReader.isTrusted(promptIfNeeded: true),
-              let context = SelectionContextReader.read() else { return }
+    /// 有选中文本就直接拿它开算，没有就弹输入框——和 `⌥⇧D`「有选区走气泡、
+    /// 没选区退回主面板」是同一条约定，肌肉记忆不用重学。
+    ///
+    /// 注意这里**不要求**辅助功能权限：问命令这条路只需要键盘输入。没授权时
+    /// 读不到选区，那就退化成输入框，而不是整个功能打不开。
+    private func handleAssistantHotKey() {
         if let miniHUDPanel, miniHUDPanel.isVisible {
             miniHUDPanel.orderOut(nil)
         }
-        triageViewModel.load(context)
-        triagePanel?.positionNearMouse(
-            customSize: NSSize(width: 420, height: 350)
+
+        let context = SelectionContextReader.isTrusted(promptIfNeeded: true)
+            ? SelectionContextReader.read()
+            : nil
+        if let context,
+           !context.selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+               .isEmpty {
+            assistantViewModel.startWithSelection(context)
+        } else {
+            assistantViewModel.startWithQuestion()
+        }
+
+        assistantPanel?.positionNearMouse(
+            customSize: NSSize(width: 460, height: 380)
         )
-        triagePanel?.markDisplayed()
-        triagePanel?.makeKeyAndOrderFront(nil)
-        triagePanel?.orderFrontRegardless()
+        assistantPanel?.markDisplayed()
+        assistantPanel?.makeKeyAndOrderFront(nil)
+        assistantPanel?.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func showMiniHUD(with text: String) {
@@ -752,8 +767,8 @@ extension Notification.Name {
             "triggerMiniHUD"
         )
 
-    static let triggerTriage =
+    static let triggerAssistant =
         Notification.Name(
-            "triggerTriage"
+            "triggerAssistant"
         )
 }

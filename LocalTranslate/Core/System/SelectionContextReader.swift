@@ -256,7 +256,7 @@ nonisolated enum SelectionContextReader {
     private static let stringForMarkerRangeAttribute = "AXStringForTextMarkerRange"
 
     /// 用选区所在的**自然段**作为上下文单位。段落既是词义消歧真正需要的范围，
-    /// 也省掉了逐个 marker 前后挪 400 次的往返——那样每次分诊都要几百次跨进程
+    /// 也省掉了逐个 marker 前后挪 400 次的往返——那样每次唤起都要几百次跨进程
     /// AX 调用，在阅读场景里会明显卡顿。
     private static func webSurroundingText(
         from element: AXUIElement,

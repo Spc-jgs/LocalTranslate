@@ -16,6 +16,10 @@ nonisolated enum AppSettings {
         static let customPrompt = "customTranslationPrompt"
         static let targetLanguage = "translationTargetLanguage"
 
+        // MARK: Assistant
+
+        static let assistantHandoffTarget = "assistantHandoffTarget"
+
         // MARK: Live Subtitles
 
         static let liveSourceLanguage = "liveSubtitlesSourceLanguage"
@@ -41,6 +45,12 @@ nonisolated enum AppSettings {
         UserDefaults.standard.string(
             forKey: Key.model
         ) ?? defaultModel
+    }
+
+    /// 只存原始值，不解释它。默认值属于 `AssistantHandoffTarget`——共享层不该
+    /// 认识 Feature 的类型，否则 Core 与 Feature 会互相依赖（AGENTS.md 第 2 节）。
+    static var assistantHandoffTargetRaw: String? {
+        UserDefaults.standard.string(forKey: Key.assistantHandoffTarget)
     }
 
     static var baseURL: String {

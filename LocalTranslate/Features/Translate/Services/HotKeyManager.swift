@@ -54,7 +54,7 @@ nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .translateSelection: return "划词翻译 / 打开浮窗"
         case .miniHUD: return "划词气泡"
-        case .explainSelection: return "词义分诊气泡"
+        case .explainSelection: return "本机助手"
         case .screenshotOCR: return "截图 OCR 翻译"
         case .liveSubtitles: return "实时字幕"
         }

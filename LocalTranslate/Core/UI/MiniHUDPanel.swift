@@ -58,7 +58,7 @@ final class MiniHUDPanel: NSPanel {
 
 
     /// 覆盖 `orderOut` 统一释放窗口级资源；具体 Feature 的退出动作由回调负责，
-    /// 共享面板不直接持有翻译、分诊或其他状态机。
+    /// 共享面板不直接持有翻译、助手或其他状态机。
     override func orderOut(_ sender: Any?) {
         removeGlobalClickMonitor()
         onOrderOut?()

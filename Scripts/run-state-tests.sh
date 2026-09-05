@@ -135,12 +135,13 @@ run_suite "AIUsageConfigurationTests" \
   LocalTranslate/Features/AIUsage/Services/UsageDiskCache.swift \
   Tests/AIUsageConfigurationTests.swift
 
-run_suite "TriagePolicyTests" \
+run_suite "AssistantPolicyTests" \
   -framework AppKit \
   -framework ApplicationServices \
   LocalTranslate/Core/System/SelectionContextReader.swift \
-  LocalTranslate/Features/Triage/Models/TriageModels.swift \
-  Tests/TriagePolicyTests.swift
+  LocalTranslate/Features/Assistant/Models/AssistantModels.swift \
+  LocalTranslate/Features/Assistant/Models/AssistantPromptParts.swift \
+  Tests/AssistantPolicyTests.swift
 
 if [ "$WITH_REAL_CORPUS" -eq 1 ]; then
   run_suite "AIUsageRealCorpusSmoke" \
