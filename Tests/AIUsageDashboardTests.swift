@@ -4,8 +4,116 @@ import Foundation
 struct AIUsageDashboardTests {
     static func main() {
         selectedHistoryRangeControlsModelTotals()
+        sameModelIsNormalizedAcrossSources()
+        estimatedBadgeUsesActivityLaneOnly()
         catchUpStatusSaysTheNumbersAreIncomplete()
-        print("AIUsageDashboardTests: 4 passed")
+        print("AIUsageDashboardTests: 10 passed")
+    }
+
+    private static func estimatedBadgeUsesActivityLaneOnly() {
+        let observed = account(
+            id: "observed",
+            provider: .openAI,
+            modelID: "gpt-observed",
+            tokens: 10,
+            confidence: .low,
+            activityQuality: .observed
+        )
+        let observedDashboard = UsageDashboardSnapshot(
+            accounts: [observed],
+            range: .sevenDays
+        )
+        expect(
+            observedDashboard.providerRows.allSatisfy { !$0.isEstimated },
+            "额度或账号降级把本机事实误标成估算"
+        )
+
+        let estimated = account(
+            id: "estimated",
+            provider: .google,
+            modelID: "agy-activity-estimate",
+            tokens: 10,
+            activityQuality: .estimated
+        )
+        let estimatedDashboard = UsageDashboardSnapshot(
+            accounts: [estimated],
+            range: .sevenDays
+        )
+        expect(
+            estimatedDashboard.providerRows.allSatisfy(\.isEstimated),
+            "活动估算没有进入 Provider 标记"
+        )
+    }
+
+    private static func sameModelIsNormalizedAcrossSources() {
+        let openAI = account(
+            id: "codex",
+            provider: .openAI,
+            modelID: "gpt-5.6-sol",
+            tokens: 30
+        )
+        let agy = account(
+            id: "agy",
+            provider: .google,
+            modelID: "GPT-5.6-SOL",
+            tokens: 12
+        )
+        let rows = UsageDashboardSnapshot(
+            accounts: [openAI, agy],
+            range: .sevenDays
+        ).models
+
+        expect(rows.count == 1, "同一 modelID 被来源拆成了多行")
+        expect(rows[0].usage.totalTokens == 42, "跨来源模型 Token 没有相加")
+        expect(rows[0].provider == .openAI, "模型厂商沿用了 AGY 的账号来源")
+    }
+
+    private static func account(
+        id: String,
+        provider: ProviderKind,
+        modelID: String,
+        tokens: Int64,
+        confidence: DataConfidence = .high,
+        activityQuality: UsageDataQuality = .observed
+    ) -> AccountSnapshot {
+        AccountSnapshot(
+            id: id,
+            sortOrder: 0,
+            provider: provider,
+            billingKind: .local,
+            displayName: id,
+            email: nil,
+            plan: nil,
+            quotaWindows: [],
+            activity: [],
+            dailyActivity: [
+                DailyActivity(date: Date(), tokens: tokens, turns: 1)
+            ],
+            modelActivity: [
+                ModelActivity(
+                    modelID: modelID,
+                    displayName: modelID,
+                    period: .sevenDays,
+                    usage: TokenBreakdown(inputTokens: tokens),
+                    turns: 1,
+                    costUSD: nil,
+                    costKind: nil
+                )
+            ],
+            updatedAt: Date(),
+            sourceLabel: "fixture",
+            confidence: confidence,
+            statusMessage: nil,
+            schemaVersion: AccountSnapshot.currentSchemaVersion,
+            quotaAvailable: false,
+            activityAvailable: true,
+            catchUp: nil,
+            quotaStatus: nil,
+            activityStatus: UsageDataStatus(
+                quality: activityQuality,
+                updatedAt: Date()
+            )
+        )
     }
 
     private static func selectedHistoryRangeControlsModelTotals() {
@@ -33,7 +141,9 @@ struct AIUsageDashboardTests {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: true,
             activityAvailable: true,
-            catchUp: nil
+            catchUp: nil,
+            quotaStatus: nil,
+            activityStatus: nil
         )
 
         expect(modelTotal(account, range: .sevenDays) == 70, "7-day model total used another range")

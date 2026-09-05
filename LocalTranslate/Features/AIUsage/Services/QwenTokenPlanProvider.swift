@@ -58,9 +58,14 @@ struct QwenTokenPlanProvider: UsageProvider {
             confidence: activity == nil ? .low : .high,
             statusMessage: status,
             schemaVersion: AccountSnapshot.currentSchemaVersion,
-            quotaAvailable: true,
-            activityAvailable: true,
-            catchUp: activity.map(UsageCatchUpProgress.init(indexed:))
+            quotaAvailable: false,
+            activityAvailable: activity != nil,
+            catchUp: activity.map(UsageCatchUpProgress.init(indexed:)),
+            quotaStatus: UsageDataStatus(quality: .unavailable, updatedAt: nil),
+            activityStatus: UsageDataStatus(
+                quality: activity == nil ? .unavailable : .observed,
+                updatedAt: activity == nil ? nil : Date()
+            )
         )
     }
 

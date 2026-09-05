@@ -78,11 +78,40 @@ public final class LiveTranslationService {
         let context: [SubtitleItem]
         let sourceLanguage: SubtitleSourceLanguage
         let archivable: Bool
+        let retryCount: Int
         let onPartial: @MainActor (LiveTranslationRequestKey, String) -> Void
         let completion: @MainActor (LiveTranslationRequestKey, String) -> Void
 
         /// 整句定稿：主行靠它翻页，不能被打断重来。
         var isStable: Bool { key.kind == .final && !archivable }
+
+        func archived() -> TranslationJob {
+            TranslationJob(
+                key: key,
+                sourceText: sourceText,
+                continuing: continuing,
+                context: context,
+                sourceLanguage: sourceLanguage,
+                archivable: true,
+                retryCount: retryCount,
+                onPartial: onPartial,
+                completion: completion
+            )
+        }
+
+        func retryingAsArchive() -> TranslationJob {
+            TranslationJob(
+                key: key,
+                sourceText: sourceText,
+                continuing: continuing,
+                context: context,
+                sourceLanguage: sourceLanguage,
+                archivable: true,
+                retryCount: retryCount + 1,
+                onPartial: onPartial,
+                completion: completion
+            )
+        }
     }
 
     private var pendingForeground: TranslationJob?
@@ -92,13 +121,15 @@ public final class LiveTranslationService {
     /// 但它同样不能去抢 preview 的槽位——那个槽位只有一个位子，而且新进来的
     /// 会抢占正在跑的活，整句挤进去就是把用户正在看的 preview 丢掉。
     /// 单独排一队：preview 之后，归档之前，先来先到，谁也不抢占谁。
-    private var stableQueue: [TranslationJob] = []
+    private var stableQueue: LiveStableBacklog<TranslationJob>
     private var archiveQueue: [TranslationJob] = []
     private var workerTask: Task<Void, Never>?
     private var workerGeneration = 0
     private var liveActivity = false
 
-    private init() {}
+    private init() {
+        stableQueue = LiveStableBacklog(limit: Self.maximumStableBacklog)
+    }
 
     public func prepare() async {
         let model = AppSettings.model
@@ -125,6 +156,8 @@ public final class LiveTranslationService {
             return
         }
 
+        LiveSubtitleDiagnosticsLog.shared.translationQueued(id: key.diagnosticsID)
+
         submitForeground(
             TranslationJob(
                 key: key,
@@ -133,6 +166,7 @@ public final class LiveTranslationService {
                 context: Array(context.suffix(1)),
                 sourceLanguage: sourceLanguage,
                 archivable: false,
+                retryCount: 0,
                 onPartial: onPartial,
                 completion: onCompletion
             )
@@ -170,9 +204,12 @@ public final class LiveTranslationService {
         )
     }
 
-    /// 整句积压的上限。说得比翻得快时，最旧的那几条对应的内容早就翻页过去了，
-    /// 留着只会让后面的更晚到。丢弃时回一个空串，让调用方清掉待办记录。
+    /// 整句积压的上限。说得比翻得快时，最旧任务退出前台队列，但 finalized
+    /// source 不能丢；它转入 archive，在静音或停止说话后补齐历史。
     private static let maximumStableBacklog = 4
+    /// 约 64 个语义窗，按常见 5-14 词窗口足以覆盖数分钟积压；超过时显式失败，
+    /// 由 ViewModel 保留源转录，而不是让长会话无限吃内存。
+    private static let maximumArchiveBacklog = 64
 
     /// 整句定稿翻译。主行靠它翻页，所以说话期间也要跑；但它排在 preview
     /// 之后，且不抢占正在跑的活。
@@ -192,21 +229,21 @@ public final class LiveTranslationService {
             return
         }
 
-        stableQueue.append(
-            TranslationJob(
+        LiveSubtitleDiagnosticsLog.shared.translationQueued(id: key.diagnosticsID)
+
+        let job = TranslationJob(
                 key: key,
                 sourceText: sourceText,
                 continuing: "",
                 context: Array(context.suffix(1)),
                 sourceLanguage: sourceLanguage,
                 archivable: false,
+                retryCount: 0,
                 onPartial: { _, _ in },
                 completion: onCompletion
             )
-        )
-        while stableQueue.count > Self.maximumStableBacklog {
-            let dropped = stableQueue.removeFirst()
-            dropped.completion(dropped.key, "")
+        if let displaced = stableQueue.append(job) {
+            enqueueArchiveJob(displaced.archived())
         }
         startWorkerIfNeeded()
     }
@@ -244,7 +281,7 @@ public final class LiveTranslationService {
         pendingForeground = nil
         activeJob = nil
         activeIsArchive = false
-        stableQueue.removeAll(keepingCapacity: false)
+        stableQueue.removeAll()
         archiveQueue.removeAll(keepingCapacity: false)
         workerTask?.cancel()
         workerTask = nil
@@ -285,6 +322,7 @@ public final class LiveTranslationService {
             context: Array(context.suffix(1)),
             sourceLanguage: sourceLanguage,
             archivable: true,
+            retryCount: 0,
             onPartial: onPartial,
             completion: onCompletion
         )
@@ -325,6 +363,11 @@ public final class LiveTranslationService {
               pendingForeground?.key != job.key,
               !archiveQueue.contains(where: { $0.key == job.key }) else { return }
         archiveQueue.append(job)
+        if archiveQueue.count > Self.maximumArchiveBacklog {
+            let overflow = archiveQueue.removeFirst()
+            overflow.completion(overflow.key, "")
+            trace("archive-budget-exceeded", key: overflow.key)
+        }
         trace("archive-enqueued", key: job.key)
     }
 
@@ -406,6 +449,9 @@ public final class LiveTranslationService {
             }
 
             activeJob = job
+            LiveSubtitleDiagnosticsLog.shared.translationStarted(
+                id: job.key.diagnosticsID
+            )
             trace("translation-started", key: job.key)
             let translatedText: String
             do {
@@ -428,6 +474,15 @@ public final class LiveTranslationService {
             guard !Task.isCancelled, workerGeneration == generation else { return }
             activeJob = nil
             activeIsArchive = false
+            if translatedText.isEmpty,
+               job.key.kind == .final,
+               job.retryCount < 1 {
+                // finalized source 不因一次网络或模型失败消失。第一次失败转到
+                // archive，等静音后再试一次；仍失败才通知调用方显式收口。
+                enqueueArchiveJob(job.retryingAsArchive())
+                trace("translation-retry-enqueued", key: job.key)
+                continue
+            }
             job.completion(job.key, translatedText)
             trace("translation-completed", key: job.key)
         }
@@ -505,6 +560,9 @@ public final class LiveTranslationService {
             if let content = chunk.message?.content, !content.isEmpty {
                 if firstTokenAt == nil {
                     firstTokenAt = Date()
+                    LiveSubtitleDiagnosticsLog.shared.translationFirstToken(
+                        id: key.diagnosticsID
+                    )
                 }
                 fullTranslation += content
                 let cleaned = LiveCaptionPresenter.stitch(

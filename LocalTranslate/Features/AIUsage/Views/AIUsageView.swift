@@ -277,7 +277,7 @@ struct AIUsageView: View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeading(
                 title: "今日模型使用",
-                subtitle: "按本机时区自然日汇总模型、Token、活动次数与参考费用"
+                subtitle: "按本机时区自然日汇总模型、Token、活动记录与参考费用"
             )
 
             // 四个等权指标卡扫视时没有落点。今日 Token 升为主视觉，
@@ -462,7 +462,7 @@ private struct UsageHeadlineCard: View {
                             Text(PercentageFormatter.format(row.share))
                             Spacer()
                             if row.turns > 0 {
-                                Text("\(row.turns) 次活动")
+                                Text("\(row.turns) 条活动记录")
                             }
                         }
                         .font(.system(size: 9))
@@ -586,7 +586,7 @@ private struct TodayHeadlineMetric: View {
                 .padding(.top, 5)
 
             HStack(spacing: 6) {
-                Text("\(turns) 次调用")
+                Text("\(turns) 条活动记录")
                     .monospacedDigit()
 
                 Text("·")
@@ -1027,7 +1027,7 @@ private struct ModelBreakdownTable: View {
                                 Text(
                                     row.turns == 0 && row.usage.totalTokens == 0
                                         ? "\(row.provider.rawValue) · 活动中，等待用量落盘"
-                                        : "\(row.provider.rawValue) · \(row.turns) 次"
+                                        : "\(row.provider.rawValue) · \(row.turns) 条记录"
                                 )
                                     .font(.system(size: 8.5))
                                     .foregroundStyle(.tertiary)
@@ -1162,7 +1162,7 @@ private struct DailyBreakdownTable: View {
                 HStack {
                     Text(point.date.formatted(.dateTime.year().month(.twoDigits).day(.twoDigits)))
                     Spacer()
-                    Text(point.turns > 0 ? "\(point.turns) 次" : "—")
+                    Text(point.turns > 0 ? "\(point.turns) 条" : "—")
                         .foregroundStyle(.secondary)
                         .frame(width: 90, alignment: .trailing)
                     Text(TokenFormatter.compact(point.tokens))
@@ -1198,7 +1198,7 @@ private struct AccountSourceDisclosure: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         if activity.turns > 0 {
-                            Text("\(activity.turns) 次")
+                            Text("\(activity.turns) 条")
                                 .foregroundStyle(.tertiary)
                         }
                         Text(TokenFormatter.compact(activity.tokens))
@@ -1215,7 +1215,8 @@ private struct AccountSourceDisclosure: View {
                 HStack {
                     Text(account.sourceLabel)
                     Spacer()
-                    Text("可信度 \(account.confidence.localizedTitle)")
+                    Text(laneStatus("额度", account.resolvedQuotaStatus))
+                    Text(laneStatus("活动", account.resolvedActivityStatus))
                 }
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
@@ -1284,8 +1285,15 @@ private struct AccountSourceDisclosure: View {
         case .ninetyDays:
             return "最近 90 天"
         case .lifetime:
-            return "全部历史"
+            return "索引内全部"
         }
+    }
+
+    private func laneStatus(_ title: String, _ status: UsageDataStatus) -> String {
+        if let updatedAt = status.updatedAt {
+            return "\(title) \(status.quality.localizedTitle) · \(updatedAt.formatted(date: .omitted, time: .shortened))"
+        }
+        return "\(title) \(status.quality.localizedTitle)"
     }
 }
 
@@ -1384,19 +1392,6 @@ private extension ProviderKind {
             return "diamond.fill"
         case .xAI:
             return "xmark"
-        }
-    }
-}
-
-private extension DataConfidence {
-    var localizedTitle: String {
-        switch self {
-        case .high:
-            return "高"
-        case .medium:
-            return "中"
-        case .low:
-            return "低"
         }
     }
 }

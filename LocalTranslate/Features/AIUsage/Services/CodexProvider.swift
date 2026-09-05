@@ -160,7 +160,19 @@ nonisolated struct CodexProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: !windows.isEmpty,
             activityAvailable: activityError == nil || !serverDaily.isEmpty,
-            catchUp: codexCatchUp
+            catchUp: codexCatchUp,
+            quotaStatus: UsageDataStatus(
+                quality: windows.isEmpty ? .unavailable : .official,
+                updatedAt: windows.isEmpty ? nil : Date()
+            ),
+            activityStatus: UsageDataStatus(
+                quality: activityError != nil && serverDaily.isEmpty
+                    ? .unavailable
+                    : (!serverDaily.isEmpty && localUsage.indexedFiles > 0
+                        ? .mixed
+                        : (!serverDaily.isEmpty ? .official : .observed)),
+                updatedAt: activityError != nil && serverDaily.isEmpty ? nil : Date()
+            )
         )
     }
 
@@ -419,8 +431,7 @@ private nonisolated struct CodexResponses {
     let hasError: Bool
     let statusMessage: String?
 
-    // 字段是 [String: Any]，类型无法是 Sendable；该值本身不可变。
-    nonisolated(unsafe) static let cancelled = CodexResponses(
+    static let cancelled = CodexResponses(
         account: [:],
         rateLimits: [:],
         usage: [:],

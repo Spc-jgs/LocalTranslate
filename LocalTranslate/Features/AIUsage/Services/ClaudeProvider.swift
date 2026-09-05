@@ -53,9 +53,14 @@ struct ClaudeProvider: UsageProvider {
             confidence: quota.windows.isEmpty ? .medium : .high,
             statusMessage: messages.isEmpty ? nil : messages.joined(separator: "；") + "。",
             schemaVersion: AccountSnapshot.currentSchemaVersion,
-            quotaAvailable: true,
+            quotaAvailable: !quota.windows.isEmpty,
             activityAvailable: true,
-            catchUp: catchUp
+            catchUp: catchUp,
+            quotaStatus: UsageDataStatus(
+                quality: quota.windows.isEmpty ? .unavailable : .cached,
+                updatedAt: quota.fetchedAt
+            ),
+            activityStatus: UsageDataStatus(quality: .observed, updatedAt: Date())
         )
     }
 
@@ -77,9 +82,11 @@ struct ClaudeProvider: UsageProvider {
             confidence: .low,
             statusMessage: status,
             schemaVersion: AccountSnapshot.currentSchemaVersion,
-            quotaAvailable: true,
-            activityAvailable: true,
-            catchUp: nil
+            quotaAvailable: false,
+            activityAvailable: false,
+            catchUp: nil,
+            quotaStatus: UsageDataStatus(quality: .unavailable, updatedAt: nil),
+            activityStatus: UsageDataStatus(quality: .unavailable, updatedAt: nil)
         )
     }
 

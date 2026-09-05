@@ -46,7 +46,12 @@ struct GrokProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: remoteOutcome.snapshot != nil,
             activityAvailable: true,
-            catchUp: catchUp
+            catchUp: catchUp,
+            quotaStatus: UsageDataStatus(
+                quality: remoteOutcome.snapshot == nil ? .unavailable : .official,
+                updatedAt: remoteOutcome.snapshot == nil ? nil : Date()
+            ),
+            activityStatus: UsageDataStatus(quality: .observed, updatedAt: Date())
         )
     }
 
@@ -78,7 +83,11 @@ struct GrokProvider: UsageProvider {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 20
-        let session = URLSession(configuration: config)
+        let session = URLSession(
+            configuration: config,
+            delegate: GrokSessionDelegate.shared,
+            delegateQueue: nil
+        )
 
         async let billing = requestJSON(
             session: session,
@@ -178,9 +187,11 @@ struct GrokProvider: UsageProvider {
         }
 
         guard (200...299).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            let safeBody = String(body.prefix(300))
-            throw UsageHubError.http(http.statusCode, safeBody)
+            throw UsageHubError.http(http.statusCode, "Grok 额度接口拒绝请求")
+        }
+
+        guard data.count <= GrokRequestPolicy.maximumResponseBytes else {
+            throw UsageHubError.invalidResponse("Grok 响应超过 1 MB 上限")
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -207,6 +218,25 @@ struct GrokProvider: UsageProvider {
         if let number = value as? NSNumber { return number.doubleValue }
         if let string = value as? String { return Double(string) }
         return nil
+    }
+}
+
+private nonisolated final class GrokSessionDelegate: NSObject,
+    URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = GrokSessionDelegate()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard GrokRequestPolicy.allows(request.url) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 private nonisolated struct GrokRemoteSnapshot: Sendable {

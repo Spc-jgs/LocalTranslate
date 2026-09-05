@@ -128,6 +128,20 @@ run_suite "AIUsageDashboardTests" \
   LocalTranslate/Features/AIUsage/Models/UsageDashboardSnapshot.swift \
   Tests/AIUsageDashboardTests.swift
 
+run_suite "AIUsageConfigurationTests" \
+  LocalTranslate/Features/AIUsage/Models/UsageModels.swift \
+  LocalTranslate/Features/AIUsage/Models/UsageCodexPath.swift \
+  LocalTranslate/Features/AIUsage/Services/GrokRequestPolicy.swift \
+  LocalTranslate/Features/AIUsage/Services/UsageDiskCache.swift \
+  Tests/AIUsageConfigurationTests.swift
+
+run_suite "TriagePolicyTests" \
+  -framework AppKit \
+  -framework ApplicationServices \
+  LocalTranslate/Core/System/SelectionContextReader.swift \
+  LocalTranslate/Features/Triage/Models/TriageModels.swift \
+  Tests/TriagePolicyTests.swift
+
 if [ "$WITH_REAL_CORPUS" -eq 1 ]; then
   run_suite "AIUsageRealCorpusSmoke" \
     LocalTranslate/Core/Config/AppSettings.swift \

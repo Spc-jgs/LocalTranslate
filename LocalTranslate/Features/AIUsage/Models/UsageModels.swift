@@ -16,6 +16,33 @@ nonisolated enum DataConfidence: String, Codable, Sendable {
     case low = "Low"
 }
 
+/// 单条数据通道的来源质量。账号级 confidence 保留用于旧缓存兼容，但新 UI
+/// 分别展示额度与活动，避免其中一条软失败时把另一条也笼统降级。
+nonisolated enum UsageDataQuality: String, Codable, Sendable {
+    case official
+    case observed
+    case cached
+    case estimated
+    case mixed
+    case unavailable
+
+    var localizedTitle: String {
+        switch self {
+        case .official: return "官方"
+        case .observed: return "本机事实"
+        case .cached: return "缓存"
+        case .estimated: return "估算"
+        case .mixed: return "混合来源"
+        case .unavailable: return "不可用"
+        }
+    }
+}
+
+nonisolated struct UsageDataStatus: Codable, Sendable {
+    let quality: UsageDataQuality
+    let updatedAt: Date?
+}
+
 nonisolated enum AccountBillingKind: String, Codable, Sendable {
     case subscription
     case apiKey
@@ -145,7 +172,7 @@ nonisolated struct UsageCatchUpProgress: Codable, Sendable, Equatable {
 }
 
 nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8
 
     let id: String
     let sortOrder: Int
@@ -167,6 +194,22 @@ nonisolated struct AccountSnapshot: Identifiable, Codable, Sendable {
     let activityAvailable: Bool?
     /// 只有走本机索引的 Provider 会填；纯 API 来源没有分片补齐这回事。
     let catchUp: UsageCatchUpProgress?
+    let quotaStatus: UsageDataStatus?
+    let activityStatus: UsageDataStatus?
+
+    var resolvedQuotaStatus: UsageDataStatus {
+        quotaStatus ?? UsageDataStatus(
+            quality: quotaAvailable == false ? .unavailable : .cached,
+            updatedAt: updatedAt
+        )
+    }
+
+    var resolvedActivityStatus: UsageDataStatus {
+        activityStatus ?? UsageDataStatus(
+            quality: activityAvailable == false ? .unavailable : .observed,
+            updatedAt: updatedAt
+        )
+    }
 
     func activity(for period: ActivityPeriod) -> PeriodActivity? {
         activity.first { $0.period == period }

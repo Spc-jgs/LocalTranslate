@@ -15,15 +15,26 @@ final class UsageDiskCache: @unchecked Sendable {
     private var pendingAccounts: [AccountSnapshot]?
     private var hasScheduledWrite = false
 
-    private init() {
+    init(cacheFileURL: URL? = nil) {
         let fileManager = FileManager.default
         let cachesDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
 
         let appCacheDir = cachesDirectory.appendingPathComponent("LocalTranslate", isDirectory: true)
-        try? fileManager.createDirectory(at: appCacheDir, withIntermediateDirectories: true)
+        let resolvedCacheFileURL = cacheFileURL
+            ?? appCacheDir.appendingPathComponent("ai_usage_snapshots.json")
+        let resolvedDirectory = resolvedCacheFileURL.deletingLastPathComponent()
+        try? fileManager.createDirectory(
+            at: resolvedDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: resolvedDirectory.path
+        )
 
-        self.cacheFileURL = appCacheDir.appendingPathComponent("ai_usage_snapshots.json")
+        self.cacheFileURL = resolvedCacheFileURL
     }
 
     func load() -> [AccountSnapshot] {
@@ -47,11 +58,16 @@ final class UsageDiskCache: @unchecked Sendable {
     /// 全量快照——六个 Provider 就是把同一个文件重写六遍。这里只保留最后
     /// 一份，落盘推迟一小段时间。
     func save(_ accounts: [AccountSnapshot]) {
-        guard !accounts.isEmpty else { return }
-
         writeQueue.async { [weak self] in
             guard let self else { return }
             self.pendingAccounts = accounts
+
+            if accounts.isEmpty {
+                self.hasScheduledWrite = false
+                self.pendingAccounts = nil
+                self.writeNow([])
+                return
+            }
 
             guard !self.hasScheduledWrite else { return }
             self.hasScheduledWrite = true
@@ -78,10 +94,20 @@ final class UsageDiskCache: @unchecked Sendable {
 
     private func writeNow(_ accounts: [AccountSnapshot]) {
         do {
+            if accounts.isEmpty {
+                if FileManager.default.fileExists(atPath: cacheFileURL.path) {
+                    try FileManager.default.removeItem(at: cacheFileURL)
+                }
+                return
+            }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(accounts)
             try data.write(to: cacheFileURL, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: cacheFileURL.path
+            )
         } catch {
             // Ignore background cache write failures
         }

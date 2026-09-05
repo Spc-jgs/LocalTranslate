@@ -78,7 +78,7 @@ nonisolated struct IndexedActivitySnapshot: Sendable {
 }
 
 extension UsageCatchUpProgress {
-    init(indexed snapshot: IndexedActivitySnapshot) {
+    nonisolated init(indexed snapshot: IndexedActivitySnapshot) {
         self.init(
             pending: snapshot.catchUpPending,
             progress: snapshot.indexedProgress,

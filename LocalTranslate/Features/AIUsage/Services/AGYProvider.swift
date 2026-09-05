@@ -110,7 +110,17 @@ struct AGYProvider: UsageProvider {
             schemaVersion: AccountSnapshot.currentSchemaVersion,
             quotaAvailable: quotaValue != nil,
             activityAvailable: activityAvailable,
-            catchUp: catchUp
+            catchUp: catchUp,
+            quotaStatus: UsageDataStatus(
+                quality: quotaValue == nil ? .unavailable : .official,
+                updatedAt: quotaValue == nil ? nil : Date()
+            ),
+            activityStatus: UsageDataStatus(
+                quality: !activityAvailable
+                    ? .unavailable
+                    : (activityIsEstimated ? .estimated : .observed),
+                updatedAt: activityAvailable ? Date() : nil
+            )
         )
     }
 

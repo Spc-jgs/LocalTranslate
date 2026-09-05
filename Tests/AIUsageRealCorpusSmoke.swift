@@ -405,7 +405,7 @@ struct AIUsageRealCorpusSmoke {
         print(
             "\(providerID): 复算 \(expectedTotal) / 索引 \(actualTotal)，"
                 + "覆盖 \(snapshot.indexedFiles)/\(expectedFiles) 文件，"
-                + "\(misdated.isEmpty ? "逐日一致" : "逐日有分叉")"
+                + "\(misdated.isEmpty ? "逐日在容差内一致" : "逐日有分叉")"
         )
     }
 

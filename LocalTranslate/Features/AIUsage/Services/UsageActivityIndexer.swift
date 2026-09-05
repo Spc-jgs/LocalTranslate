@@ -356,8 +356,12 @@ private nonisolated struct CodexIncrementalIndexer {
         cancellation: UsageScanCancellation,
         budget: UsageScanBudget
     ) throws -> IndexedActivitySnapshot {
-        var meter = UsageScanMeter(budget: budget, cancellation: cancellation)
+        let startedBudget = budget.started()
         let files = candidateFiles()
+        var meter = UsageScanMeter(
+            budget: startedBudget,
+            cancellation: cancellation
+        )
         let livePaths = Set(files.map { $0.metadata.path })
         var catchUpPending = false
 
@@ -624,8 +628,12 @@ private nonisolated struct GrokIncrementalIndexer {
         cancellation: UsageScanCancellation,
         budget: UsageScanBudget
     ) throws -> IndexedActivitySnapshot {
-        var meter = UsageScanMeter(budget: budget, cancellation: cancellation)
+        let startedBudget = budget.started()
         let files = candidateFiles()
+        var meter = UsageScanMeter(
+            budget: startedBudget,
+            cancellation: cancellation
+        )
         let livePaths = Set(files.map { $0.metadata.path })
         var catchUpPending = false
 
@@ -991,8 +999,12 @@ private nonisolated struct LocalJSONLUsageIndexer {
         cancellation: UsageScanCancellation,
         budget: UsageScanBudget
     ) throws -> IndexedActivitySnapshot {
-        var meter = UsageScanMeter(budget: budget, cancellation: cancellation)
+        let startedBudget = budget.started()
         let files = candidateFiles()
+        var meter = UsageScanMeter(
+            budget: startedBudget,
+            cancellation: cancellation
+        )
         let livePaths = Set(files.map { $0.metadata.path })
         var catchUpPending = false
 
@@ -1297,8 +1309,12 @@ private nonisolated struct AGYIncrementalIndexer {
         cancellation: UsageScanCancellation,
         budget: UsageScanBudget
     ) throws -> IndexedActivitySnapshot {
-        var meter = UsageScanMeter(budget: budget, cancellation: cancellation)
+        let startedBudget = budget.started()
         let files = candidateFiles()
+        var meter = UsageScanMeter(
+            budget: startedBudget,
+            cancellation: cancellation
+        )
         let livePaths = Set(files.map { $0.metadata.path })
         var totalRows = 0
         var catchUpPending = false
@@ -1332,7 +1348,7 @@ private nonisolated struct AGYIncrementalIndexer {
                 modificationDate: candidate.metadata.modificationDate,
                 afterRowID: afterRowID,
                 cancellation: cancellation,
-                deadline: budget.deadline,
+                deadline: meter.budget.deadline,
                 meter: &meter,
                 maximumRows: min(
                     Self.rowsPerDatabase,

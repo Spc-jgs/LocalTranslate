@@ -75,7 +75,7 @@ nonisolated final class UsageScanExecutor: @unchecked Sendable {
                     do {
                         try cancellation.check()
                         continuation.resume(
-                            returning: try operation(cancellation, budget.started())
+                            returning: try operation(cancellation, budget)
                         )
                     } catch {
                         continuation.resume(throwing: error)

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct LiveAudioTimeRange: Hashable, Sendable {
+public nonisolated struct LiveAudioTimeRange: Hashable, Sendable {
     public let start: TimeInterval
     public let duration: TimeInterval
 
@@ -26,7 +26,7 @@ public struct LiveAudioTimeRange: Hashable, Sendable {
     }
 }
 
-public struct LiveTranscriptSpan: Identifiable, Hashable, Sendable {
+public nonisolated struct LiveTranscriptSpan: Identifiable, Hashable, Sendable {
     public enum State: Hashable, Sendable {
         case volatile
         case finalized
@@ -63,7 +63,7 @@ public struct LiveTranscriptSpan: Identifiable, Hashable, Sendable {
     }
 }
 
-public struct LiveSpeechRecognitionUpdate: Sendable, Equatable {
+public nonisolated struct LiveSpeechRecognitionUpdate: Sendable, Equatable {
     /// Spans crossing the Apple finalization frontier for the first time.
     public let finalizedSpans: [LiveTranscriptSpan]
     /// Full replaceable snapshot that remains after range reconciliation.
@@ -91,13 +91,13 @@ public struct LiveSpeechRecognitionUpdate: Sendable, Equatable {
     }
 }
 
-struct LiveTranscriptFragment: Sendable {
+nonisolated struct LiveTranscriptFragment: Sendable {
     let text: String
     let range: LiveAudioTimeRange
     let isFinal: Bool
 }
 
-struct LiveTranscriptSpanLedger: Sendable {
+nonisolated struct LiveTranscriptSpanLedger: Sendable {
     private(set) var spans: [LiveTranscriptSpan] = []
     private var emittedFinalizedIDs: Set<UUID> = []
     private var latestAudioEnd: TimeInterval = 0
@@ -210,7 +210,7 @@ struct LiveTranscriptSpanLedger: Sendable {
     }
 }
 
-struct LiveTranslationWindow: Identifiable, Hashable, Sendable {
+nonisolated struct LiveTranslationWindow: Identifiable, Hashable, Sendable {
     let id: UUID
     let range: LiveAudioTimeRange
     let sourceText: String
@@ -226,7 +226,7 @@ struct LiveTranslationWindow: Identifiable, Hashable, Sendable {
     }
 }
 
-struct LiveTranslationWindowPlanner: Sendable {
+nonisolated struct LiveTranslationWindowPlanner: Sendable {
     private struct TimedWord: Sendable {
         let text: String
         let range: LiveAudioTimeRange
@@ -386,7 +386,7 @@ struct LiveTranslationWindowPlanner: Sendable {
     }
 }
 
-public struct LiveTranslationRequestKey: Hashable, Sendable {
+public nonisolated struct LiveTranslationRequestKey: Hashable, Sendable {
     public enum Kind: Hashable, Sendable {
         case preview
         case final
@@ -397,6 +397,10 @@ public struct LiveTranslationRequestKey: Hashable, Sendable {
     public let revision: Int
     public let kind: Kind
     public let audioRange: LiveAudioTimeRange
+
+    var diagnosticsID: String {
+        "\(sessionID.uuidString):\(segmentID.uuidString):\(revision):\(kind)"
+    }
 
     public init(
         sessionID: UUID,
@@ -413,7 +417,7 @@ public struct LiveTranslationRequestKey: Hashable, Sendable {
     }
 }
 
-struct LiveTranslationIdentityGate {
+nonisolated struct LiveTranslationIdentityGate {
     static func acceptsPreview(
         responseKey: LiveTranslationRequestKey,
         currentKey: LiveTranslationRequestKey?,
@@ -437,7 +441,7 @@ struct LiveTranslationIdentityGate {
     }
 }
 
-struct LiveSubtitleSemanticSegmenter {
+nonisolated struct LiveSubtitleSemanticSegmenter {
     private static let sentenceTerminators: Set<Character> = [
         ".", "?", "!", "。", "？", "！"
     ]
@@ -604,7 +608,7 @@ struct LiveSubtitleSemanticSegmenter {
     }
 }
 
-struct LivePreviewStabilityPolicy {
+nonisolated struct LivePreviewStabilityPolicy {
     private static let sentenceTerminators: Set<Character> = [
         ".", "?", "!", "。", "？", "！"
     ]
@@ -709,5 +713,83 @@ struct LivePreviewStabilityPolicy {
             }
         }
         return 0
+    }
+}
+
+/// 保留最新前台定稿任务，同时把被挤出的最旧任务交还给调用方做归档。
+/// 它只决定排队，不决定丢弃；丢弃 finalized source 会让历史永久缺句。
+nonisolated struct LiveStableBacklog<Element> {
+    let limit: Int
+    private var elements: [Element] = []
+
+    var isEmpty: Bool { elements.isEmpty }
+
+    init(limit: Int) {
+        precondition(limit > 0)
+        self.limit = limit
+    }
+
+    mutating func append(_ element: Element) -> Element? {
+        elements.append(element)
+        guard elements.count > limit else { return nil }
+        return elements.removeFirst()
+    }
+
+    mutating func removeFirst() -> Element {
+        elements.removeFirst()
+    }
+
+    mutating func removeAll() {
+        elements.removeAll(keepingCapacity: false)
+    }
+}
+
+nonisolated enum LiveLagMode: Equatable {
+    case normal
+    case catchUp
+    case emergency
+
+    static func next(from current: LiveLagMode, lag: TimeInterval) -> LiveLagMode {
+        switch current {
+        case .normal:
+            if lag >= 3 { return .emergency }
+            if lag >= 1.5 { return .catchUp }
+            return .normal
+        case .catchUp:
+            if lag >= 3 { return .emergency }
+            if lag <= 0.8 { return .normal }
+            return .catchUp
+        case .emergency:
+            if lag <= 0.8 { return .normal }
+            if lag <= 2 { return .catchUp }
+            return .emergency
+        }
+    }
+}
+
+/// 音量只是 UI 仪表，不需要跟随每个 Core Audio buffer 重绘。线程安全地限制到
+/// 约 30 Hz，避免音频回调为每个 buffer 都创建一个 MainActor Task。
+nonisolated final class LiveAudioLevelGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let minimumIntervalNanoseconds: UInt64
+    private var lastPublishedAt: UInt64?
+
+    init(maximumUpdatesPerSecond: UInt64 = 30) {
+        precondition(maximumUpdatesPerSecond > 0)
+        minimumIntervalNanoseconds = 1_000_000_000 / maximumUpdatesPerSecond
+    }
+
+    func shouldPublish(
+        at timestamp: UInt64 = DispatchTime.now().uptimeNanoseconds
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let lastPublishedAt,
+           timestamp >= lastPublishedAt,
+           timestamp - lastPublishedAt < minimumIntervalNanoseconds {
+            return false
+        }
+        lastPublishedAt = timestamp
+        return true
     }
 }

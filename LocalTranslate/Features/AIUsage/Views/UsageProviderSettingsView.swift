@@ -10,6 +10,9 @@ struct UsageProviderSettingsView: View {
     @Environment(\.dismiss)
     private var dismiss
 
+    @State
+    private var draft = UsageProviderSettings.empty
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
 
@@ -32,6 +35,9 @@ struct UsageProviderSettingsView: View {
             footer
         }
         .frame(width: 520, height: 480)
+        .onAppear {
+            draft = store.settings
+        }
     }
 
     private var header: some View {
@@ -39,7 +45,7 @@ struct UsageProviderSettingsView: View {
             Text("账号来源")
                 .font(.system(size: 15, weight: .semibold))
 
-            Text("LocalTranslate 只读取本机客户端目录，不代你登录任何账号。")
+            Text("活动来自本机日志；部分额度会通过现有登录态刷新，LocalTranslate 不代你登录。")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
         }
@@ -61,7 +67,7 @@ struct UsageProviderSettingsView: View {
                 Spacer()
 
                 Button {
-                    store.addCodexAccount()
+                    addCodexAccount()
                 } label: {
                     Label("添加", systemImage: "plus")
                         .font(.system(size: 11))
@@ -69,7 +75,7 @@ struct UsageProviderSettingsView: View {
                 .buttonStyle(.borderless)
             }
 
-            if store.settings.codexAccounts.isEmpty {
+            if draft.codexAccounts.isEmpty {
                 Text("没有配置任何 Codex 账号。")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
@@ -77,7 +83,7 @@ struct UsageProviderSettingsView: View {
                     .padding(.vertical, 10)
             } else {
                 VStack(spacing: 10) {
-                    ForEach(store.settings.codexAccounts) { account in
+                    ForEach(draft.codexAccounts) { account in
                         codexRow(account)
                     }
                 }
@@ -104,7 +110,7 @@ struct UsageProviderSettingsView: View {
                 .frame(maxWidth: .infinity)
 
                 Button(role: .destructive) {
-                    store.removeCodexAccount(id: account.id)
+                    draft.codexAccounts.removeAll { $0.id == account.id }
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -144,6 +150,12 @@ struct UsageProviderSettingsView: View {
                         .help("目录不存在：该来源不会有数据")
                 }
             }
+
+            if let validationMessage = validationMessage(for: account.id) {
+                Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+            }
         }
         .padding(10)
         .background {
@@ -170,8 +182,16 @@ struct UsageProviderSettingsView: View {
 
                     Toggle(
                         isOn: Binding(
-                            get: { store.isEnabled(provider) },
-                            set: { store.setEnabled($0, for: provider) }
+                            get: {
+                                !draft.disabledBuiltInProviderIDs.contains(provider.rawValue)
+                            },
+                            set: { enabled in
+                                if enabled {
+                                    draft.disabledBuiltInProviderIDs.remove(provider.rawValue)
+                                } else {
+                                    draft.disabledBuiltInProviderIDs.insert(provider.rawValue)
+                                }
+                            }
                         )
                     ) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -204,6 +224,7 @@ struct UsageProviderSettingsView: View {
             Spacer()
 
             Button("完成") {
+                store.update { $0 = draft }
                 dismiss()
             }
             .keyboardShortcut(.defaultAction)
@@ -220,17 +241,54 @@ struct UsageProviderSettingsView: View {
     ) -> Binding<String> {
         Binding(
             get: {
-                store.settings.codexAccounts
+                draft.codexAccounts
                     .first { $0.id == id }?[keyPath: keyPath] ?? ""
             },
             set: { newValue in
-                store.update { settings in
-                    guard let index = settings.codexAccounts.firstIndex(
+                guard let index = draft.codexAccounts.firstIndex(
                         where: { $0.id == id }
-                    ) else { return }
-                    settings.codexAccounts[index][keyPath: keyPath] = newValue
-                }
+                ) else { return }
+                draft.codexAccounts[index][keyPath: keyPath] = newValue
             }
         )
+    }
+
+    private func addCodexAccount() {
+        let order = (draft.codexAccounts.map(\.sortOrder).max() ?? 0) + 10
+        let usedPaths = Set(
+            draft.codexAccounts.compactMap {
+                UsageCodexPath.canonicalKey($0.relativePath)
+            }
+        )
+        var suffix = 2
+        var relativePath = ".codex_account\(suffix)"
+        while let key = UsageCodexPath.canonicalKey(relativePath),
+              usedPaths.contains(key) {
+            suffix += 1
+            relativePath = ".codex_account\(suffix)"
+        }
+        draft.codexAccounts.append(
+            UsageCodexAccount(
+                id: "codex-\(UUID().uuidString.prefix(8).lowercased())",
+                displayName: "新 Codex 账号",
+                relativePath: relativePath,
+                sortOrder: order
+            )
+        )
+    }
+
+    private func validationMessage(for accountID: String) -> String? {
+        guard let account = draft.codexAccounts.first(where: { $0.id == accountID }) else {
+            return nil
+        }
+        guard let key = UsageCodexPath.canonicalKey(account.relativePath) else {
+            return "请输入用户主目录内的相对路径"
+        }
+        let duplicates = draft.codexAccounts.filter {
+            UsageCodexPath.canonicalKey($0.relativePath) == key
+        }
+        return duplicates.count > 1
+            ? "与其他 Codex 账号指向同一目录，不会重复统计"
+            : nil
     }
 }

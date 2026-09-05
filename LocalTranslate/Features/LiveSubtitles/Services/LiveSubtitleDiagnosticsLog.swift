@@ -46,6 +46,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         label: "com.shaopc.LocalTranslate.live-subtitle-log",
         qos: .utility
     )
+    private let enabledLock = NSLock()
+    private var loggingEnabled = false
     private var handle: FileHandle?
     private(set) var fileURL: URL?
 
@@ -77,6 +79,27 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private var trimmedWords = 0
     private var lags: [Double] = []
     private var firstTokenMS: [Int] = []
+    private var ingressToASRMS: [Int] = []
+    private var queueWaitMS: [Int] = []
+    private var ingressToVisibleMS: [Int] = []
+    private var ingressToCommitMS: [Int] = []
+
+    private struct AudioMark {
+        let audioEnd: TimeInterval
+        let timestamp: UInt64
+    }
+
+    private struct RequestTiming {
+        let audioEnd: TimeInterval
+        let ingressAt: UInt64?
+        var queuedAt: UInt64?
+        var requestStartedAt: UInt64?
+        var firstTokenAt: UInt64?
+    }
+
+    private var ingressedAudioEnd: TimeInterval = 0
+    private var audioMarks: [AudioMark] = []
+    private var requests: [String: RequestTiming] = [:]
 
     // 当前这一句的累计。
     private var segmentChanges = 0
@@ -100,6 +123,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
             let url = directory.appendingPathComponent("session-\(stamp).log")
             FileManager.default.createFile(atPath: url.path, contents: nil)
             handle = try? FileHandle(forWritingTo: url)
+            setLoggingEnabled(handle != nil)
             fileURL = url
             startedAt = Date()
             resetCounters()
@@ -109,6 +133,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
 
     /// 会话总表。单条流水看不出趋势，能回答「有没有变好」的是这一份。
     func end(reason: String) {
+        setLoggingEnabled(false)
         queue.async { [self] in
             guard handle != nil else { return }
             let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
@@ -167,10 +192,23 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                 "firstToken avg=\(average(firstTokenMS.map(Double.init)))ms "
                     + "p90=\(percentile(firstTokenMS.map(Double.init), 0.9))ms"
             )
+            write(
+                "pipeline ingressToASR p50=\(percentileMS(ingressToASRMS, 0.5)) "
+                    + "p90=\(percentileMS(ingressToASRMS, 0.9)) "
+                    + "queueWait p50=\(percentileMS(queueWaitMS, 0.5)) "
+                    + "p90=\(percentileMS(queueWaitMS, 0.9))"
+            )
+            write(
+                "pipeline ingressToVisible p50=\(percentileMS(ingressToVisibleMS, 0.5)) "
+                    + "p90=\(percentileMS(ingressToVisibleMS, 0.9)) "
+                    + "ingressToCommit p50=\(percentileMS(ingressToCommitMS, 0.5)) "
+                    + "p90=\(percentileMS(ingressToCommitMS, 0.9))"
+            )
             write("stopped reason=\(reason)")
             try? handle?.close()
             handle = nil
             startedAt = nil
+            setLoggingEnabled(false)
         }
     }
 
@@ -189,6 +227,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         commonPrefix: Int,
         isCommitted: Bool
     ) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             captionChanges += 1
@@ -215,6 +254,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     /// planner 这一轮切出了几个窗口，还剩多少词没切。
     /// 「一句都没 commit」到底是切不出来还是切出来了被挡住，靠这一行区分。
     func plannerDrain(force: Bool, windows: Int, pendingWords: Int) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             plannerDrains += 1
@@ -233,6 +273,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         windowEnd: Double,
         displayedEnd: Double
     ) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             commitBlocks[reason, default: 0] += 1
@@ -248,6 +289,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     }
 
     func commitAccepted(windowEnd: Double, displayedEnd: Double) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             commitsAccepted += 1
@@ -264,6 +306,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
 
     /// 一次上屏被压住了。`cause` 是 throttle（改写太密）或 commitHold（整句定格中）。
     func hold(cause: String) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             if cause == "commitHold" {
@@ -279,6 +322,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     /// `bounded` 表示这次是否因为超过上界而被截断——上一版只在截断时才记，
     /// 于是占多数的未截断情况一条数据都没有。
     func previewAnchor(held: Bool, words: Int, bounded: Bool) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             if held { anchorHolds += 1 } else { anchorMoves += 1 }
@@ -290,6 +334,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     /// 主行翻页。翻页应该和上一行更新同时发生——这一行用来验证它有没有真的
     /// 发生，以及每页攒了多少词。
     func pageTurn(words: Int) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             pageTurns += 1
@@ -301,6 +346,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     /// 页面超上界被裁掉了多少词。这部分内容还没定稿也没进上一行，
     /// 从主行消失却没有去处——次数多就说明上界定得太紧。
     func pageTrimmed(words: Int) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             pageTrims += 1
@@ -310,6 +356,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     }
 
     func segmentCommitted(words: Int, characters: Int, lag: Double) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             segments += 1
@@ -327,9 +374,110 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     }
 
     func translationMetrics(firstTokenMS value: Int) {
+        guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil, value >= 0 else { return }
             firstTokenMS.append(value)
+        }
+    }
+
+    func audioIngress(duration: TimeInterval) {
+        guard isLoggingEnabled(), duration.isFinite, duration > 0 else { return }
+        let timestamp = Self.monotonicNow()
+        queue.async { [self] in
+            guard handle != nil else { return }
+            ingressedAudioEnd += duration
+            audioMarks.append(
+                AudioMark(audioEnd: ingressedAudioEnd, timestamp: timestamp)
+            )
+            let cutoff = max(ingressedAudioEnd - 90, 0)
+            audioMarks.removeAll { $0.audioEnd < cutoff }
+        }
+    }
+
+    func asrPublished(audioEnd: TimeInterval) {
+        guard isLoggingEnabled() else { return }
+        let timestamp = Self.monotonicNow()
+        queue.async { [self] in
+            guard handle != nil,
+                  let ingressAt = ingressTimestamp(for: audioEnd),
+                  let elapsed = elapsedMS(from: ingressAt, to: timestamp) else { return }
+            ingressToASRMS.append(elapsed)
+        }
+    }
+
+    func windowReady(id: String, audioEnd: TimeInterval) {
+        guard isLoggingEnabled() else { return }
+        queue.async { [self] in
+            guard handle != nil else { return }
+            requests[id] = RequestTiming(
+                audioEnd: audioEnd,
+                ingressAt: ingressTimestamp(for: audioEnd)
+            )
+            if requests.count > 256 {
+                requests.removeValue(forKey: requests.keys.first ?? id)
+            }
+        }
+    }
+
+    func translationQueued(id: String) {
+        guard isLoggingEnabled() else { return }
+        updateRequest(id: id) { timing, now in
+            if timing.queuedAt == nil { timing.queuedAt = now }
+        }
+    }
+
+    func translationStarted(id: String) {
+        guard isLoggingEnabled() else { return }
+        updateRequest(id: id) { [self] timing, now in
+            guard timing.requestStartedAt == nil else { return }
+            timing.requestStartedAt = now
+            if let queuedAt = timing.queuedAt,
+               let elapsed = elapsedMS(from: queuedAt, to: now) {
+                queueWaitMS.append(elapsed)
+            }
+        }
+    }
+
+    func translationFirstToken(id: String) {
+        guard isLoggingEnabled() else { return }
+        updateRequest(id: id) { timing, now in
+            if timing.firstTokenAt == nil { timing.firstTokenAt = now }
+        }
+    }
+
+    func firstVisible(id: String) {
+        guard isLoggingEnabled() else { return }
+        let timestamp = Self.monotonicNow()
+        queue.async { [self] in
+            guard handle != nil,
+                  let timing = requests.removeValue(forKey: id) else { return }
+            if let ingressAt = timing.ingressAt,
+               let elapsed = elapsedMS(from: ingressAt, to: timestamp) {
+                ingressToVisibleMS.append(elapsed)
+            }
+        }
+    }
+
+    func translationCommitted(id: String) {
+        guard isLoggingEnabled() else { return }
+        let timestamp = Self.monotonicNow()
+        queue.async { [self] in
+            guard handle != nil, let timing = requests[id] else {
+                return
+            }
+            if let ingressAt = timing.ingressAt,
+               let elapsed = elapsedMS(from: ingressAt, to: timestamp) {
+                ingressToCommitMS.append(elapsed)
+            }
+        }
+    }
+
+    func translationFailed(id: String) {
+        guard isLoggingEnabled() else { return }
+        queue.async { [self] in
+            guard handle != nil else { return }
+            requests.removeValue(forKey: id)
         }
     }
 
@@ -358,6 +506,13 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         trimmedWords = 0
         lags.removeAll()
         firstTokenMS.removeAll()
+        ingressToASRMS.removeAll()
+        queueWaitMS.removeAll()
+        ingressToVisibleMS.removeAll()
+        ingressToCommitMS.removeAll()
+        ingressedAudioEnd = 0
+        audioMarks.removeAll()
+        requests.removeAll()
         segmentChanges = 0
         segmentRewrites = 0
     }
@@ -404,6 +559,49 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
             max(0, Int((Double(sorted.count - 1) * q).rounded()))
         )
         return String(format: "%.2f", sorted[index])
+    }
+
+    private func percentileMS(_ values: [Int], _ q: Double) -> String {
+        guard !values.isEmpty else { return "n/a" }
+        return percentile(values.map(Double.init), q) + "ms"
+    }
+
+    private func ingressTimestamp(for audioEnd: TimeInterval) -> UInt64? {
+        audioMarks.first { $0.audioEnd + 0.02 >= audioEnd }?.timestamp
+            ?? audioMarks.last?.timestamp
+    }
+
+    private func updateRequest(
+        id: String,
+        _ update: @escaping (inout RequestTiming, UInt64) -> Void
+    ) {
+        let timestamp = Self.monotonicNow()
+        queue.async { [self] in
+            guard handle != nil, var timing = requests[id] else { return }
+            update(&timing, timestamp)
+            requests[id] = timing
+        }
+    }
+
+    private func isLoggingEnabled() -> Bool {
+        enabledLock.lock()
+        defer { enabledLock.unlock() }
+        return loggingEnabled
+    }
+
+    private func setLoggingEnabled(_ enabled: Bool) {
+        enabledLock.lock()
+        loggingEnabled = enabled
+        enabledLock.unlock()
+    }
+
+    private func elapsedMS(from start: UInt64, to end: UInt64) -> Int? {
+        guard end >= start else { return nil }
+        return Int((end - start) / 1_000_000)
+    }
+
+    private static func monotonicNow() -> UInt64 {
+        DispatchTime.now().uptimeNanoseconds
     }
 
     private static let fileStampFormatter: DateFormatter = {

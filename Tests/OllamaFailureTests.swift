@@ -9,7 +9,25 @@ struct OllamaFailureTests {
         timeoutIsNotReportedAsNotRunning()
         unknownErrorsStillSayWhichSubsystemFailed()
         localizedErrorsKeepTheirOwnDescription()
-        print("OllamaFailureTests: 6 passed")
+        endpointPrivacyBoundaryIsExplicit()
+        print("OllamaFailureTests: 12 passed")
+    }
+
+    private static func endpointPrivacyBoundaryIsExplicit() {
+        expect(OllamaEndpoint.privacyBoundary("http://localhost:11434") == .loopback, "localhost 不是回环")
+        expect(OllamaEndpoint.privacyBoundary("http://127.0.0.1:11434") == .loopback, "IPv4 回环未识别")
+        expect(
+            OllamaEndpoint.privacyBoundary("https://ollama.example.com")
+                == .encryptedRemote(host: "ollama.example.com"),
+            "HTTPS 远端边界未识别"
+        )
+        expect(
+            OllamaEndpoint.privacyBoundary("http://ollama.example.com")
+                == .insecureRemote(host: "ollama.example.com"),
+            "HTTP 远端风险未识别"
+        )
+        expect(OllamaEndpoint.privacyBoundary("file:///tmp/model") == .invalid, "非 HTTP 地址未拒绝")
+        expect(OllamaEndpoint.privacyBoundary("https://user:pass@example.com") == .invalid, "URL 凭据未拒绝")
     }
 
     /// 用户报告的原始现象：Ollama 没启动时只显示

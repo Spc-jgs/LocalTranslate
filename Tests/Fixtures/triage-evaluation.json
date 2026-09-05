@@ -1,0 +1,142 @@
+[
+  {
+    "id": "ordinary-idempotent",
+    "selected": "idempotent",
+    "context": "The retry endpoint is idempotent, so sending the same request twice has the same effect as sending it once.",
+    "expected_route": "enough",
+    "reference": "幂等操作重复执行不会继续改变最终结果。"
+  },
+  {
+    "id": "ordinary-serendipity",
+    "selected": "serendipity",
+    "context": "Finding that tiny bookstore while we were lost was pure serendipity.",
+    "expected_route": "enough",
+    "reference": "意外发现有价值或令人愉快事物的幸运。"
+  },
+  {
+    "id": "ordinary-amortized",
+    "selected": "amortized analysis",
+    "context": "Although one array append may resize the buffer, amortized analysis gives constant time per append over many operations.",
+    "expected_route": "enough",
+    "reference": "把偶发高成本摊到一系列操作上分析平均成本。"
+  },
+  {
+    "id": "ordinary-drop-in",
+    "selected": "drop-in replacement",
+    "context": "The library is a drop-in replacement for the old parser and requires no caller changes.",
+    "expected_route": "enough",
+    "reference": "可直接替换旧组件且无需修改调用方。"
+  },
+  {
+    "id": "ordinary-backpressure",
+    "selected": "backpressure",
+    "context": "The consumer applies backpressure when the producer sends events faster than it can process them.",
+    "expected_route": "enough",
+    "reference": "下游通过减速或限流阻止上游无限堆积。"
+  },
+  {
+    "id": "ambiguous-bank",
+    "selected": "bank",
+    "context": "",
+    "expected_route": "escalate",
+    "reference": "缺少上下文，可能是银行、河岸、倾斜等。"
+  },
+  {
+    "id": "ambiguous-port",
+    "selected": "port",
+    "context": "Docker maps container port 8080 to host port 80.",
+    "expected_route": "enough",
+    "reference": "这里是网络端口，不是港口或移植。"
+  },
+  {
+    "id": "ambiguous-charge",
+    "selected": "charge",
+    "context": "The prosecutor decided to file a criminal charge after reviewing the evidence.",
+    "expected_route": "enough",
+    "reference": "这里指刑事指控。"
+  },
+  {
+    "id": "ambiguous-lead",
+    "selected": "lead",
+    "context": "",
+    "expected_route": "escalate",
+    "reference": "缺少上下文，词义和读音均可能不同。"
+  },
+  {
+    "id": "ambiguous-draft",
+    "selected": "draft",
+    "context": "Save the article as a draft before the editor reviews it.",
+    "expected_route": "enough",
+    "reference": "这里指尚未定稿的草稿。"
+  },
+  {
+    "id": "current-model-version",
+    "selected": "GPT-5.6 Sol",
+    "context": "Is GPT-5.6 Sol still the recommended Codex model in September 2026?",
+    "expected_route": "escalate",
+    "reference": "涉及当前模型与日期，必须核对实时官方信息。"
+  },
+  {
+    "id": "current-wwdc",
+    "selected": "SpeechAnalyzer",
+    "context": "What changed in SpeechAnalyzer in the WWDC 2026 SDK?",
+    "expected_route": "escalate",
+    "reference": "涉及特定年份 SDK 变化，必须核对官方文档。"
+  },
+  {
+    "id": "entity-fictional",
+    "selected": "Northstar Flux Engine",
+    "context": "The article claims Northstar Flux Engine v3 doubled battery life.",
+    "expected_route": "escalate",
+    "reference": "无法从上下文确认该实体和说法是否真实。"
+  },
+  {
+    "id": "entity-project-commit",
+    "selected": "9c61419",
+    "context": "Commit 9c61419 changed the live subtitle planner parameters.",
+    "expected_route": "escalate",
+    "reference": "项目私有提交，离开仓库无法确认细节。"
+  },
+  {
+    "id": "current-quota",
+    "selected": "Apple Intelligence quota",
+    "context": "What is the exact Apple Intelligence quota available today?",
+    "expected_route": "escalate",
+    "reference": "实时额度与精确数字必须查当前官方来源。"
+  },
+  {
+    "id": "technical-rcu",
+    "selected": "read-copy-update",
+    "context": "The kernel uses read-copy-update so readers can access the old version while a writer publishes a replacement.",
+    "expected_route": "enough",
+    "reference": "读者无锁读取旧版本，写者复制并发布新版本，旧版本延迟回收。"
+  },
+  {
+    "id": "technical-mcp",
+    "selected": "MCP",
+    "context": "",
+    "expected_route": "escalate",
+    "reference": "缩写缺少上下文，可能对应多个概念。"
+  },
+  {
+    "id": "technical-cve",
+    "selected": "CVE-2026-12345",
+    "context": "Is CVE-2026-12345 exploitable on the latest macOS release?",
+    "expected_route": "escalate",
+    "reference": "安全漏洞、年份和最新系统状态都必须查实时来源。"
+  },
+  {
+    "id": "technical-reentrancy",
+    "selected": "actor reentrancy",
+    "context": "After an await, another task may run on the same actor before the original function resumes.",
+    "expected_route": "enough",
+    "reference": "actor 隔离函数跨 await 暂停时，其他任务可能进入并改变状态。"
+  },
+  {
+    "id": "technical-wal",
+    "selected": "WAL sidecar",
+    "context": "SQLite readers need the database together with its -wal sidecar to observe committed pages not yet checkpointed into the main file.",
+    "expected_route": "enough",
+    "reference": "SQLite WAL 模式的旁文件可能包含尚未 checkpoint 回主库的已提交页。"
+  }
+]

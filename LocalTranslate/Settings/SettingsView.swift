@@ -689,6 +689,32 @@ struct SettingsView: View {
                     }
                 }
 
+                switch OllamaEndpoint.privacyBoundary(baseURL) {
+                case .encryptedRemote(let host):
+                    Label(
+                        "选词、OCR 与语音转录会发送到远端主机 \(host)",
+                        systemImage: "network"
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                case .insecureRemote(let host):
+                    Label(
+                        "远端主机 \(host) 使用明文 HTTP，内容可能在传输中暴露",
+                        systemImage: "exclamationmark.shield.fill"
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                case .invalid:
+                    Label("请输入不含账号密码的 HTTP 或 HTTPS Ollama 地址", systemImage: "xmark.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .loopback:
+                    EmptyView()
+                }
+
                 if let connectionError {
 
                     rowDivider

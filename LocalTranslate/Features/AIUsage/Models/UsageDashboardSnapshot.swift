@@ -94,7 +94,8 @@ nonisolated struct UsageDashboardSnapshot {
                     ?? (tokens: 0, turns: 0, estimated: false)
                 provider.tokens += activity.tokens
                 provider.turns += activity.turns
-                provider.estimated = provider.estimated || account.confidence == .low
+                provider.estimated = provider.estimated
+                    || account.resolvedActivityStatus.quality == .estimated
                 providerMap[account.provider] = provider
             }
         }
@@ -179,7 +180,7 @@ nonisolated struct UsageDashboardSnapshot {
         period: ActivityPeriod
     ) -> [ModelUsageRow] {
         struct MutableModel {
-            let provider: ProviderKind
+            var provider: ProviderKind
             let modelID: String
             let displayName: String
             var usage = TokenBreakdown()
@@ -193,12 +194,23 @@ nonisolated struct UsageDashboardSnapshot {
 
         for account in accounts {
             for model in account.modelActivity where model.period == period {
-                let key = "\(account.provider.rawValue)::\(model.modelID)"
+                let key = model.modelID
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                let provider = inferredModelProvider(
+                    modelID: model.modelID,
+                    fallback: account.provider
+                )
                 var current = modelMap[key] ?? MutableModel(
-                    provider: account.provider,
+                    provider: provider,
                     modelID: model.modelID,
                     displayName: model.displayName
                 )
+
+                if current.provider == account.provider,
+                   provider != account.provider {
+                    current.provider = provider
+                }
 
                 current.usage.add(model.usage)
                 current.turns += model.turns
@@ -232,6 +244,24 @@ nonisolated struct UsageDashboardSnapshot {
             )
         }
         .sorted { $0.usage.totalTokens > $1.usage.totalTokens }
+    }
+
+    private static func inferredModelProvider(
+        modelID: String,
+        fallback: ProviderKind
+    ) -> ProviderKind {
+        let normalized = modelID.lowercased()
+        if normalized.contains("claude") { return .anthropic }
+        if normalized.contains("gemini") { return .google }
+        if normalized.contains("grok") { return .xAI }
+        if normalized.contains("qwen") { return .alibaba }
+        if normalized.contains("gpt")
+            || normalized.hasPrefix("o1")
+            || normalized.hasPrefix("o3")
+            || normalized.hasPrefix("o4") {
+            return .openAI
+        }
+        return fallback
     }
 }
 

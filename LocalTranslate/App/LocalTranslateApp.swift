@@ -53,6 +53,13 @@ private struct MenuBarContent: View {
             )
         }
 
+        Button("词义分诊 (⌥⇧E)") {
+            NotificationCenter.default.post(
+                name: .triggerTriage,
+                object: nil
+            )
+        }
+
         Button("截图翻译 (⌥⇧S)") {
             NotificationCenter.default.post(
                 name: .triggerScreenshotOCR,
@@ -148,6 +155,9 @@ final class AppDelegate:
     private var miniHUDPanel:
         MiniHUDPanel?
 
+    private var triagePanel:
+        MiniHUDPanel?
+
     private var hotKeyManager:
         HotKeyManager?
 
@@ -159,6 +169,9 @@ final class AppDelegate:
 
     private let miniHUDViewModel =
         MiniHUDViewModel()
+
+    private let triageViewModel =
+        TriageViewModel()
 
     // MARK: - Launch
 
@@ -210,9 +223,26 @@ final class AppDelegate:
                         }
                     )
             )
+        miniHUD.onOrderOut = {
+            SpeechReader.shared.stop()
+        }
 
         self.miniHUDPanel =
             miniHUD
+
+        let triagePanel = MiniHUDPanel(
+            content: TriageView(
+                viewModel: triageViewModel,
+                onClose: { [weak self] in
+                    self?.triagePanel?.orderOut(nil)
+                }
+            ),
+            initialSize: NSSize(width: 420, height: 350)
+        )
+        triagePanel.onOrderOut = { [weak self] in
+            self?.triageViewModel.cancel()
+        }
+        self.triagePanel = triagePanel
 
         observeContentSize()
         observeMiniHUDContentSize()
@@ -235,6 +265,9 @@ final class AppDelegate:
                     },
                     .miniHUD: { [weak self] in
                         self?.handleMiniHUDHotKey()
+                    },
+                    .explainSelection: { [weak self] in
+                        self?.handleTriageHotKey()
                     }
                 ]
             )
@@ -303,6 +336,14 @@ final class AppDelegate:
                     ),
                 name:
                     .triggerMiniHUD,
+                object: nil
+            )
+
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector: #selector(handleTriageNotification),
+                name: .triggerTriage,
                 object: nil
             )
     }
@@ -449,6 +490,11 @@ final class AppDelegate:
         handleMiniHUDHotKey()
     }
 
+    @objc
+    private func handleTriageNotification(_ notification: Notification) {
+        handleTriageHotKey()
+    }
+
     // MARK: - Live Subtitles HotKey
 
     private func handleLiveSubtitlesHotKey() {
@@ -478,6 +524,10 @@ final class AppDelegate:
             return
         }
 
+        if let triagePanel, triagePanel.isVisible {
+            triagePanel.orderOut(nil)
+        }
+
         if let selectedText = SelectedTextReader.read(),
            !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showMiniHUD(with: selectedText)
@@ -486,6 +536,21 @@ final class AppDelegate:
 
         // 若无选中文本，回退至主面板
         handleTranslateHotKey()
+    }
+
+    private func handleTriageHotKey() {
+        guard SelectionContextReader.isTrusted(promptIfNeeded: true),
+              let context = SelectionContextReader.read() else { return }
+        if let miniHUDPanel, miniHUDPanel.isVisible {
+            miniHUDPanel.orderOut(nil)
+        }
+        triageViewModel.load(context)
+        triagePanel?.positionNearMouse(
+            customSize: NSSize(width: 420, height: 350)
+        )
+        triagePanel?.markDisplayed()
+        triagePanel?.makeKeyAndOrderFront(nil)
+        triagePanel?.orderFrontRegardless()
     }
 
     private func showMiniHUD(with text: String) {
@@ -685,5 +750,10 @@ extension Notification.Name {
     static let triggerMiniHUD =
         Notification.Name(
             "triggerMiniHUD"
+        )
+
+    static let triggerTriage =
+        Notification.Name(
+            "triggerTriage"
         )
 }

@@ -19,7 +19,39 @@ struct LiveSubtitlePipelineStateTests {
         requestRevisionAndRangeRejectStaleKey()
         finalIdentityRejectsDuplicateAndOldSession()
         previewAnchorHoldsItsStartWhileTheSentenceGrows()
-        print("LiveSubtitlePipelineStateTests: 16 passed")
+        stableBacklogReturnsOldestForArchive()
+        lagModeUsesHysteresisAndEmergencyCutover()
+        audioLevelUpdatesAreThrottled()
+        print("LiveSubtitlePipelineStateTests: 31 passed")
+    }
+
+    private static func lagModeUsesHysteresisAndEmergencyCutover() {
+        expect(LiveLagMode.next(from: .normal, lag: 1.49) == .normal, "正常态过早追赶")
+        expect(LiveLagMode.next(from: .normal, lag: 1.5) == .catchUp, "1.5 秒没有追赶")
+        expect(LiveLagMode.next(from: .catchUp, lag: 1.0) == .catchUp, "追赶态缺少滞回")
+        expect(LiveLagMode.next(from: .catchUp, lag: 0.8) == .normal, "追上后没有退出")
+        expect(LiveLagMode.next(from: .normal, lag: 3.0) == .emergency, "3 秒没有切到紧急追赶")
+        expect(LiveLagMode.next(from: .emergency, lag: 2.4) == .emergency, "紧急态过早退出")
+        expect(LiveLagMode.next(from: .emergency, lag: 2.0) == .catchUp, "紧急态没有降级追赶")
+        expect(LiveLagMode.next(from: .emergency, lag: 0.7) == .normal, "紧急态追上后没有恢复")
+    }
+
+    private static func stableBacklogReturnsOldestForArchive() {
+        var backlog = LiveStableBacklog<Int>(limit: 2)
+        expect(backlog.append(1) == nil, "未满的 stable 队列错误淘汰任务")
+        expect(backlog.append(2) == nil, "刚好达到上限时错误淘汰任务")
+        expect(backlog.append(3) == 1, "积压没有把最旧定稿交给 archive")
+        expect(backlog.removeFirst() == 2, "stable 队列不再保持 FIFO")
+        expect(backlog.removeFirst() == 3, "最新定稿没有留在前台队列")
+        expect(backlog.isEmpty, "取完任务后 stable 队列没有清空")
+    }
+
+    private static func audioLevelUpdatesAreThrottled() {
+        let gate = LiveAudioLevelGate(maximumUpdatesPerSecond: 10)
+        expect(gate.shouldPublish(at: 1_000_000_000), "首个音量值没有发布")
+        expect(!gate.shouldPublish(at: 1_050_000_000), "50ms 内重复发布音量")
+        expect(gate.shouldPublish(at: 1_100_000_000), "达到 10Hz 间隔仍被拦截")
+        expect(gate.shouldPublish(at: 10), "时钟回退后音量门没有恢复")
     }
 
     private static func volatileRangeReplacesInsteadOfAppending() {

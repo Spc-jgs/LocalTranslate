@@ -4,6 +4,7 @@ import AppKit
 final class MiniHUDPanel: NSPanel {
 
     var isPinned = false
+    var onOrderOut: (() -> Void)?
     private var displayedAt: Date = .distantPast
     private var globalClickMonitor: Any?
 
@@ -40,11 +41,11 @@ final class MiniHUDPanel: NSPanel {
         ]
         animationBehavior = .utilityWindow
 
-        setupGlobalClickMonitor()
     }
 
     func markDisplayed() {
         displayedAt = Date()
+        setupGlobalClickMonitor()
     }
 
     override var canBecomeKey: Bool {
@@ -56,12 +57,11 @@ final class MiniHUDPanel: NSPanel {
     }
 
 
-    /// 窗口收起时停掉朗读。
-    ///
-    /// 覆盖 `orderOut` 而不是逐个补隐藏的调用点：Esc、失焦、快捷键、关闭按钮
-    /// 都会走到这里，漏一个就会出现「窗口没了还在说话」。
+    /// 覆盖 `orderOut` 统一释放窗口级资源；具体 Feature 的退出动作由回调负责，
+    /// 共享面板不直接持有翻译、分诊或其他状态机。
     override func orderOut(_ sender: Any?) {
-        SpeechReader.shared.stop()
+        removeGlobalClickMonitor()
+        onOrderOut?()
         super.orderOut(sender)
     }
 
@@ -144,6 +144,7 @@ final class MiniHUDPanel: NSPanel {
     }
 
     private func setupGlobalClickMonitor() {
+        guard globalClickMonitor == nil else { return }
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
@@ -159,9 +160,13 @@ final class MiniHUDPanel: NSPanel {
         }
     }
 
+    private func removeGlobalClickMonitor() {
+        guard let globalClickMonitor else { return }
+        NSEvent.removeMonitor(globalClickMonitor)
+        self.globalClickMonitor = nil
+    }
+
     deinit {
-        if let monitor = globalClickMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
+        removeGlobalClickMonitor()
     }
 }

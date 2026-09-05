@@ -17,6 +17,13 @@ nonisolated enum OllamaEndpoint {
         }
     }
 
+    enum PrivacyBoundary: Equatable {
+        case loopback
+        case encryptedRemote(host: String)
+        case insecureRemote(host: String)
+        case invalid
+    }
+
     /// 去掉首尾空白与结尾斜杠，并把 `localhost` 映射为 `127.0.0.1`。
     ///
     /// macOS URLSession 会优先解析 IPv6 的 `::1`，而 Ollama 默认只监听
@@ -45,12 +52,31 @@ nonisolated enum OllamaEndpoint {
         path: String,
         baseURL rawBaseURL: String = AppSettings.baseURL
     ) throws -> URL {
-        guard let url = URL(
-            string: normalizedBase(rawBaseURL) + path
-        ) else {
+        guard let url = URL(string: normalizedBase(rawBaseURL) + path),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil,
+              url.user == nil,
+              url.password == nil else {
             throw EndpointError.invalidURL
         }
 
         return url
+    }
+
+    static func privacyBoundary(
+        _ rawBaseURL: String = AppSettings.baseURL
+    ) -> PrivacyBoundary {
+        guard let url = URL(string: normalizedBase(rawBaseURL)),
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(),
+              ["http", "https"].contains(scheme),
+              url.user == nil,
+              url.password == nil else { return .invalid }
+        if ["127.0.0.1", "::1", "localhost"].contains(host) {
+            return .loopback
+        }
+        return scheme == "https"
+            ? .encryptedRemote(host: host)
+            : .insecureRemote(host: host)
     }
 }

@@ -13,13 +13,13 @@ nonisolated struct UsageCodexAccount: Codable, Identifiable, Sendable, Equatable
     var relativePath: String
     var sortOrder: Int
 
-    var homeURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(relativePath, isDirectory: true)
+    var resolvedHomeURL: URL? {
+        UsageCodexPath.resolve(relativePath)
     }
 
     var exists: Bool {
-        FileManager.default.fileExists(atPath: homeURL.path)
+        guard let resolvedHomeURL else { return false }
+        return FileManager.default.fileExists(atPath: resolvedHomeURL.path)
     }
 }
 
@@ -157,47 +157,20 @@ final class UsageProviderSettingsStore: ObservableObject {
         persist()
     }
 
-    func addCodexAccount() {
-        update { settings in
-            let order = (settings.codexAccounts.map(\.sortOrder).max() ?? 0) + 10
-            settings.codexAccounts.append(
-                UsageCodexAccount(
-                    id: "codex-\(UUID().uuidString.prefix(8).lowercased())",
-                    displayName: "新 Codex 账号",
-                    relativePath: ".codex",
-                    sortOrder: order
-                )
-            )
-        }
-    }
-
-    func removeCodexAccount(id: String) {
-        update { settings in
-            settings.codexAccounts.removeAll { $0.id == id }
-        }
-    }
-
-    func setEnabled(_ enabled: Bool, for provider: BuiltInUsageProvider) {
-        update { settings in
-            if enabled {
-                settings.disabledBuiltInProviderIDs.remove(provider.rawValue)
-            } else {
-                settings.disabledBuiltInProviderIDs.insert(provider.rawValue)
-            }
-        }
-    }
-
     func isEnabled(_ provider: BuiltInUsageProvider) -> Bool {
         !settings.disabledBuiltInProviderIDs.contains(provider.rawValue)
     }
 
     /// 当前配置对应的全部 Provider，`UsageStore` 据此构造。
     func makeProviders() -> [any UsageProvider] {
-        var providers: [any UsageProvider] = settings.codexAccounts.map { account in
-            CodexProvider(
+        var canonicalHomes = Set<String>()
+        var providers: [any UsageProvider] = settings.codexAccounts.compactMap { account in
+            guard let homeURL = account.resolvedHomeURL,
+                  canonicalHomes.insert(homeURL.path).inserted else { return nil }
+            return CodexProvider(
                 providerID: account.id,
                 displayName: account.displayName,
-                codexHome: account.homeURL,
+                codexHome: homeURL,
                 sortOrder: account.sortOrder
             )
         }
@@ -211,7 +184,14 @@ final class UsageProviderSettingsStore: ObservableObject {
 
     /// 当前配置下应当存在的账号 ID，用于清理已删除账号的缓存快照。
     func activeProviderIDs() -> Set<String> {
-        var ids = Set(settings.codexAccounts.map(\.id))
+        var canonicalHomes = Set<String>()
+        var ids = Set(
+            settings.codexAccounts.compactMap { account -> String? in
+                guard let homeURL = account.resolvedHomeURL,
+                      canonicalHomes.insert(homeURL.path).inserted else { return nil }
+                return account.id
+            }
+        )
         for builtIn in BuiltInUsageProvider.allCases where isEnabled(builtIn) {
             ids.insert(builtIn.rawValue)
         }

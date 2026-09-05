@@ -12,6 +12,7 @@ public final class LiveSpeechRecognizer: @unchecked Sendable {
     public nonisolated(unsafe) weak var delegate: LiveSpeechRecognizerDelegate?
 
     private nonisolated(unsafe) var engine: RecognitionEngine!
+    private let audioIngress = LiveAudioBufferIngress(limit: 128)
 
     public nonisolated init(language: SubtitleSourceLanguage = .english) {
         self.engine = RecognitionEngine(language: language) { [weak self] event in
@@ -31,17 +32,88 @@ public final class LiveSpeechRecognizer: @unchecked Sendable {
     }
 
     public nonisolated func start() async throws {
-        try await engine.start()
+        let stream = audioIngress.begin()
+        do {
+            try await engine.start(audioBuffers: stream)
+        } catch {
+            audioIngress.finish()
+            throw error
+        }
     }
 
     public nonisolated func stop() async {
+        audioIngress.finish()
         await engine.stop()
     }
 
     public nonisolated func appendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        Task(priority: .userInitiated) {
-            await engine.appendAudioBuffer(buffer)
+        guard audioIngress.yield(buffer) else {
+            delegate?.liveSpeechRecognizerDidFail(
+                error: NSError(
+                    domain: "LiveSpeechRecognizer",
+                    code: 5,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "音频输入积压超过 128 个缓冲区，已停止本次识别以避免静默丢音。"
+                    ]
+                )
+            )
+            audioIngress.finish()
+            return
         }
+    }
+}
+
+private nonisolated struct SendableAudioBuffer: @unchecked Sendable {
+    let value: AVAudioPCMBuffer
+}
+
+/// Core Audio 回调只入队；一个会话只有一个消费者按顺序把 PCM 交给 actor。
+/// 队列有明确上限，满时终止会话而不是静默丢 buffer 后继续产出错序字幕。
+private nonisolated final class LiveAudioBufferIngress: @unchecked Sendable {
+    private let lock = NSLock()
+    private let limit: Int
+    private var continuation: AsyncStream<SendableAudioBuffer>.Continuation?
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    func begin() -> AsyncStream<SendableAudioBuffer> {
+        let (stream, nextContinuation) = AsyncStream.makeStream(
+            of: SendableAudioBuffer.self,
+            bufferingPolicy: .bufferingOldest(limit)
+        )
+        lock.lock()
+        let previous = continuation
+        continuation = nextContinuation
+        lock.unlock()
+        previous?.finish()
+        return stream
+    }
+
+    func yield(_ buffer: AVAudioPCMBuffer) -> Bool {
+        lock.lock()
+        let current = continuation
+        lock.unlock()
+        guard let current else { return true }
+
+        switch current.yield(SendableAudioBuffer(value: buffer)) {
+        case .enqueued:
+            return true
+        case .dropped, .terminated:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    func finish() {
+        lock.lock()
+        let current = continuation
+        continuation = nil
+        lock.unlock()
+        current?.finish()
     }
 }
 
@@ -60,6 +132,7 @@ private actor RecognitionEngine {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analysisTask: Task<Void, Never>?
     private var resultsTask: Task<Void, Never>?
+    private var audioPumpTask: Task<Void, Never>?
     private var transcriptLedger = LiveTranscriptSpanLedger()
 
     private var analyzerFormat: AVAudioFormat?
@@ -78,18 +151,9 @@ private actor RecognitionEngine {
     func setLanguage(_ language: SubtitleSourceLanguage) async {
         guard language != currentLanguage else { return }
         currentLanguage = language
-
-        guard isRunning else { return }
-
-        await stop()
-        do {
-            try await start()
-        } catch {
-            eventHandler(.failure(error: error))
-        }
     }
 
-    func start() async throws {
+    func start(audioBuffers: AsyncStream<SendableAudioBuffer>) async throws {
         guard !isRunning else { return }
 
         let authorization = await speechAuthorizationStatus()
@@ -158,6 +222,14 @@ private actor RecognitionEngine {
         self.transcriptLedger.reset()
         self.isRunning = true
 
+        self.audioPumpTask = Task { [weak self] in
+            guard let self else { return }
+            for await buffer in audioBuffers {
+                guard !Task.isCancelled else { return }
+                await self.appendAudioBuffer(buffer.value)
+            }
+        }
+
         self.resultsTask = Task { [weak self] in
             do {
                 for try await result in transcriber.results {
@@ -191,8 +263,10 @@ private actor RecognitionEngine {
 
         analysisTask?.cancel()
         resultsTask?.cancel()
+        audioPumpTask?.cancel()
         analysisTask = nil
         resultsTask = nil
+        audioPumpTask = nil
 
         analyzer = nil
         transcriber = nil

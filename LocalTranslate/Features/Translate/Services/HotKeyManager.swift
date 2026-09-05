@@ -11,6 +11,7 @@ nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
 
     case translateSelection
     case miniHUD
+    case explainSelection
     case screenshotOCR
     case liveSubtitles
 
@@ -23,6 +24,7 @@ nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .screenshotOCR: return 2
         case .liveSubtitles: return 3
         case .miniHUD: return 4
+        case .explainSelection: return 5
         }
     }
 
@@ -30,6 +32,7 @@ nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .translateSelection: return UInt32(kVK_ANSI_T)
         case .miniHUD: return UInt32(kVK_ANSI_D)
+        case .explainSelection: return UInt32(kVK_ANSI_E)
         case .screenshotOCR: return UInt32(kVK_ANSI_S)
         case .liveSubtitles: return UInt32(kVK_ANSI_C)
         }
@@ -42,7 +45,7 @@ nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
     /// 连按抑制窗口。截图与字幕启动较重，给更长的间隔。
     var debounceInterval: TimeInterval {
         switch self {
-        case .translateSelection, .miniHUD: return 0.4
+        case .translateSelection, .miniHUD, .explainSelection: return 0.4
         case .screenshotOCR, .liveSubtitles: return 0.6
         }
     }
@@ -51,6 +54,7 @@ nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .translateSelection: return "划词翻译 / 打开浮窗"
         case .miniHUD: return "划词气泡"
+        case .explainSelection: return "词义分诊气泡"
         case .screenshotOCR: return "截图 OCR 翻译"
         case .liveSubtitles: return "实时字幕"
         }
@@ -60,6 +64,7 @@ nonisolated enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .translateSelection: return "⌥ ⇧ T"
         case .miniHUD: return "⌥ ⇧ D"
+        case .explainSelection: return "⌥ ⇧ E"
         case .screenshotOCR: return "⌥ ⇧ S"
         case .liveSubtitles: return "⌥ ⇧ C"
         }

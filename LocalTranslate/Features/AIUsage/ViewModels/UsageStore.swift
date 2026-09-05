@@ -210,7 +210,19 @@ final class UsageStore: ObservableObject {
             schemaVersion: snapshot.schemaVersion,
             quotaAvailable: snapshot.quotaAvailable,
             activityAvailable: snapshot.activityAvailable,
-            catchUp: snapshot.catchUp
+            catchUp: snapshot.catchUp,
+            quotaStatus: mergedStatus(
+                incoming: snapshot.resolvedQuotaStatus,
+                retainedPreviousData: snapshot.quotaAvailable == false
+                    && !(previous?.quotaWindows.isEmpty ?? true),
+                previous: previous?.resolvedQuotaStatus
+            ),
+            activityStatus: mergedStatus(
+                incoming: snapshot.resolvedActivityStatus,
+                retainedPreviousData: snapshot.activityAvailable == false
+                    && !(previous?.dailyActivity.isEmpty ?? true),
+                previous: previous?.resolvedActivityStatus
+            )
         )
         nextAccounts.removeAll { $0.id == snapshot.id }
         nextAccounts.append(merged)
@@ -222,6 +234,18 @@ final class UsageStore: ObservableObject {
 
         UsageDiskCache.shared.save(accounts)
         noteCatchUp(merged.catchUp, for: providerID)
+    }
+
+    private func mergedStatus(
+        incoming: UsageDataStatus,
+        retainedPreviousData: Bool,
+        previous: UsageDataStatus?
+    ) -> UsageDataStatus {
+        guard retainedPreviousData else { return incoming }
+        return UsageDataStatus(
+            quality: .cached,
+            updatedAt: previous?.updatedAt
+        )
     }
 
     /// 一轮扫描被预算截断后，决定要不要立刻扫下一片。

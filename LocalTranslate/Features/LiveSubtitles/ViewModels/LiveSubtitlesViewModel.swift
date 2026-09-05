@@ -35,12 +35,14 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
     private let audioCaptureService = SystemAudioCaptureService.shared
     private nonisolated(unsafe) var speechRecognizer: LiveSpeechRecognizer!
+    private nonisolated let audioLevelGate = LiveAudioLevelGate()
     private let translationService = LiveTranslationService.shared
 
     private var startTask: Task<Void, Never>?
     private var languageChangeTask: Task<Void, Never>?
     private var lifecycleGeneration = 0
-    private var silenceTimer: Timer?
+    private var silenceTask: Task<Void, Never>?
+    private var silenceDeadline: ContinuousClock.Instant?
     private var previewCoalesceTask: Task<Void, Never>?
 
     private struct PendingStableWindow {
@@ -52,6 +54,12 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         let text: String
         let sourceText: String
         let audioEnd: TimeInterval
+        let requestID: String
+    }
+
+    private struct PendingFrontRow {
+        let text: String
+        let requestID: String
     }
 
     private var sessionID = UUID()
@@ -72,6 +80,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private var latestLiveSourceRange: LiveAudioTimeRange = .zero
     private var latestRecognizedAudioEnd: TimeInterval = 0
     private var displayedAudioEnd: TimeInterval = 0
+    private var lagMode: LiveLagMode = .normal
 
     // 字幕行的展示节奏。规则在 LiveCaptionPresenter，这里只留它需要的时刻。
     private let captionClock = ContinuousClock()
@@ -82,7 +91,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private var lastCommitAt: ContinuousClock.Instant?
     private var pendingCaption: PendingCaption?
     private var lastCommittedCaption = ""
-    private var pendingFrontRow: String?
+    private var pendingFrontRow: PendingFrontRow?
     private var frontRowTask: Task<Void, Never>?
     /// 上一行的合并窗口。一批整句在几百毫秒内落地，只显示最后一条。
     private static let frontRowCoalesceInterval: Duration = .milliseconds(400)
@@ -105,6 +114,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     private static let minimumFrontRowWords = 3
     /// 合并后的窗口上界。超过就另起一组，别让一次翻页吞掉一大段。
     private static let maximumCombinedWords = 14
+    private static let failedTranslationPlaceholder = "翻译失败（已保留原文）"
 
     private init() {
         if let savedLanguage = UserDefaults.standard.string(
@@ -296,10 +306,13 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     public nonisolated func systemAudioCaptureDidOutput(
         pcmBuffer: AVAudioPCMBuffer
     ) {
+        let duration = Double(pcmBuffer.frameLength) / pcmBuffer.format.sampleRate
+        diagnostics.audioIngress(duration: duration)
         speechRecognizer.appendAudioBuffer(pcmBuffer)
     }
 
     public nonisolated func systemAudioCaptureAudioLevelDidChange(level: Float) {
+        guard audioLevelGate.shouldPublish() else { return }
         Task { @MainActor [weak self] in
             guard let self, self.isRunning else { return }
             self.audioLevel = self.audioLevel * 0.7 + level * 0.3
@@ -338,6 +351,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         guard isRunning else { return }
 
         translationService.setLiveActivity(true)
+        diagnostics.asrPublished(audioEnd: update.latestAudioEnd)
         latestRecognizedAudioEnd = max(
             latestRecognizedAudioEnd,
             update.latestAudioEnd
@@ -358,20 +372,33 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         flushPendingCaption()
         refreshLagState()
         refreshLiveSource()
-        resetSilenceTimer()
+        scheduleSilenceFlush()
     }
 
-    private func resetSilenceTimer() {
-        silenceTimer?.invalidate()
+    private func scheduleSilenceFlush() {
+        silenceDeadline = captionClock.now.advanced(
+            by: .milliseconds(Int64(silenceFlushInterval * 1_000))
+        )
+        guard silenceTask == nil else { return }
         let expectedSessionID = sessionID
-        silenceTimer = Timer.scheduledTimer(
-            withTimeInterval: silenceFlushInterval,
-            repeats: false
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self,
-                      self.sessionID == expectedSessionID,
+        silenceTask = Task { [weak self] in
+            while let self,
+                  self.sessionID == expectedSessionID,
+                  self.isRunning,
+                  let deadline = self.silenceDeadline {
+                do {
+                    try await Task.sleep(until: deadline, clock: self.captionClock)
+                } catch {
+                    return
+                }
+                guard self.sessionID == expectedSessionID,
                       self.isRunning else { return }
+                if let movedDeadline = self.silenceDeadline,
+                   self.captionClock.now < movedDeadline {
+                    continue
+                }
+                self.silenceDeadline = nil
+                self.silenceTask = nil
                 let windows = self.windowPlanner.drain(force: true)
                 self.diagnostics.plannerDrain(
                     force: true,
@@ -383,6 +410,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 self.flushPendingCaption()
                 self.translationService.setLiveActivity(false)
                 self.refreshLiveSource()
+                return
             }
         }
     }
@@ -451,6 +479,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             key: key,
             sourceText: window.sourceText
         )
+        diagnostics.windowReady(id: key.diagnosticsID, audioEnd: key.audioRange.end)
         // 主行靠这一条翻页，所以说话期间也得跑——走归档队列时它成批堆到静音
         // 才冲出来（实测相邻 segment 行号差为 2 的占一半），主行等不到。
         // 但它也不能去抢 preview 的槽位：那个槽位只有一个位子、新来的还会抢占
@@ -460,7 +489,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         translationService.enqueueStable(
             key: key,
             window.sourceText,
-            context: Array(subtitleHistory.suffix(1)),
+            context: recentTranslationContext,
             sourceLanguage: sourceLanguage
         ) { [weak self] responseKey, translatedText in
             self?.handleStableCompletion(
@@ -487,40 +516,38 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             return
         }
 
-        pendingStableWindows.removeValue(forKey: key.segmentID)
-        completedSegmentIDs.insert(key.segmentID)
         let resolved = translatedText
-        let item = SubtitleItem(
-            id: key.segmentID,
-            originalText: pending.sourceText,
-            translatedText: resolved,
-            sourceLanguage: sourceLanguage.displayName,
-            isFinal: true
-        )
-        historyAudioStarts[item.id] = key.audioRange.start
-        subtitleHistory.append(item)
-        subtitleHistory.sort {
-            historyAudioStarts[$0.id, default: 0]
-                < historyAudioStarts[$1.id, default: 0]
-        }
-        if subtitleHistory.count > 50 {
-            let removed = subtitleHistory.prefix(subtitleHistory.count - 50)
-            removed.forEach { historyAudioStarts.removeValue(forKey: $0.id) }
-            subtitleHistory.removeFirst(subtitleHistory.count - 50)
-        }
-
-        // 整句 commit 之后要上字幕条，否则用户从头到尾只看得到滑动窗口的半句。
-        // 唯一的门槛是不能倒退：`displayedAudioEnd` 会被 preview 一起推进，
-        // 所以 preview 已经跑到前面时，这句旧的整句自然就不上屏了。
         guard !resolved.isEmpty else {
+            pendingStableWindows.removeValue(forKey: key.segmentID)
+            completedSegmentIDs.insert(key.segmentID)
+            diagnostics.translationFailed(id: key.diagnosticsID)
             diagnostics.commitBlocked(
-                reason: "empty",
+                reason: "translationError",
                 windowEnd: key.audioRange.end,
                 displayedEnd: displayedAudioEnd
+            )
+            appendHistory(
+                id: key.segmentID,
+                sourceText: pending.sourceText,
+                translatedText: Self.failedTranslationPlaceholder,
+                audioStart: key.audioRange.start
             )
             return
         }
 
+        pendingStableWindows.removeValue(forKey: key.segmentID)
+        completedSegmentIDs.insert(key.segmentID)
+        diagnostics.translationCommitted(id: key.diagnosticsID)
+        appendHistory(
+            id: key.segmentID,
+            sourceText: pending.sourceText,
+            translatedText: resolved,
+            audioStart: key.audioRange.start
+        )
+
+        // 整句 commit 之后要上字幕条，否则用户从头到尾只看得到滑动窗口的半句。
+        // 唯一的门槛是不能倒退：`displayedAudioEnd` 会被 preview 一起推进，
+        // 所以 preview 已经跑到前面时，这句旧的整句自然就不上屏了。
         let windowWords = pending.sourceText
             .split(whereSeparator: \Character.isWhitespace).count
         guard windowWords >= Self.minimumFrontRowWords else {
@@ -540,7 +567,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         // 整句走的是归档队列，说话期间不与 preview 抢 Ollama，静音时才成批
         // 冲出来——实测一批 2-5 条，逐条覆盖上一行就是「一下子走三四条」。
         // 批量补齐时中间那几条早就不是「上一句」了，只有最后一条才是。
-        scheduleFrontRow(resolved)
+        scheduleFrontRow(resolved, requestID: key.diagnosticsID)
         lastCommittedCaption = resolved
         // 翻页和上一行更新是同一个动作的两面：这句进了上一行，主行就从它之后
         // 重新开始。分开做的话，主行要么凭空缩水，要么把已经定稿的话又显示一遍。
@@ -583,6 +610,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             text: resolved,
             sourceText: pending.sourceText,
             audioEnd: key.audioRange.end,
+            requestID: key.diagnosticsID,
             isCommitted: true
         )
         refreshLiveSource()
@@ -673,6 +701,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             audioRange: sourceRange
         )
         currentLiveKey = key
+        diagnostics.windowReady(id: key.diagnosticsID, audioEnd: key.audioRange.end)
         lastPreviewRequestedSourceText = sourceText
         let mayStreamInitialTranslation = currentTranslatedText.isEmpty
 
@@ -699,6 +728,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                     text: partialText,
                     sourceText: sourceText,
                     audioEnd: responseKey.audioRange.end,
+                    requestID: responseKey.diagnosticsID,
                     isCommitted: false
                 )
             }
@@ -711,6 +741,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             }
             self.currentLiveKey = nil
             guard !translatedText.isEmpty else {
+                self.diagnostics.translationFailed(id: responseKey.diagnosticsID)
                 self.traceStaleDrop(responseKey)
                 self.refreshLiveSource()
                 return
@@ -719,6 +750,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 text: translatedText,
                 sourceText: sourceText,
                 audioEnd: responseKey.audioRange.end,
+                requestID: responseKey.diagnosticsID,
                 isCommitted: false
             )
             self.refreshLiveSource()
@@ -792,7 +824,41 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 )
             ]
         }
-        return Array(subtitleHistory.suffix(1))
+        return recentTranslationContext
+    }
+
+    private var recentTranslationContext: [SubtitleItem] {
+        Array(
+            subtitleHistory.lazy
+                .filter { $0.translatedText != Self.failedTranslationPlaceholder }
+                .suffix(1)
+        )
+    }
+
+    private func appendHistory(
+        id: UUID,
+        sourceText: String,
+        translatedText: String,
+        audioStart: TimeInterval
+    ) {
+        let item = SubtitleItem(
+            id: id,
+            originalText: sourceText,
+            translatedText: translatedText,
+            sourceLanguage: sourceLanguage.displayName,
+            isFinal: true
+        )
+        historyAudioStarts[item.id] = audioStart
+        subtitleHistory.append(item)
+        subtitleHistory.sort {
+            historyAudioStarts[$0.id, default: 0]
+                < historyAudioStarts[$1.id, default: 0]
+        }
+        if subtitleHistory.count > 50 {
+            let removed = subtitleHistory.prefix(subtitleHistory.count - 50)
+            removed.forEach { historyAudioStarts.removeValue(forKey: $0.id) }
+            subtitleHistory.removeFirst(subtitleHistory.count - 50)
+        }
     }
 
     /// 译文上屏的唯一入口。
@@ -804,6 +870,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         text: String,
         sourceText: String,
         audioEnd: TimeInterval,
+        requestID: String,
         isCommitted: Bool
     ) {
         let now = captionClock.now
@@ -817,7 +884,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             pendingCaption = PendingCaption(
                 text: text,
                 sourceText: sourceText,
-                audioEnd: audioEnd
+                audioEnd: audioEnd,
+                requestID: requestID
             )
             diagnostics.hold(cause: "commitHold")
             return
@@ -838,7 +906,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             pendingCaption = PendingCaption(
                 text: text,
                 sourceText: sourceText,
-                audioEnd: audioEnd
+                audioEnd: audioEnd,
+                requestID: requestID
             )
             diagnostics.hold(cause: "throttle")
             return
@@ -880,13 +949,14 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         displayedSourceText = sourceText
         displayedTranslationSourceText = sourceText
         displayedAudioEnd = max(displayedAudioEnd, audioEnd)
+        diagnostics.firstVisible(id: requestID)
         refreshLagState()
     }
 
     /// 重新评估上一次被压住的译文。讲话时每次识别回调都会走到这里。
     /// 合并同一批整句对上一行的更新，只让最后一条落地。
-    private func scheduleFrontRow(_ text: String) {
-        pendingFrontRow = text
+    private func scheduleFrontRow(_ text: String, requestID: String) {
+        pendingFrontRow = PendingFrontRow(text: text, requestID: requestID)
         guard frontRowTask == nil else { return }
         let expectedSessionID = sessionID
         frontRowTask = Task { [weak self] in
@@ -895,9 +965,10 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                   self.sessionID == expectedSessionID,
                   self.isRunning else { return }
             self.frontRowTask = nil
-            if let text = self.pendingFrontRow {
+            if let pending = self.pendingFrontRow {
                 self.pendingFrontRow = nil
-                self.previousCaptionText = text
+                self.previousCaptionText = pending.text
+                self.diagnostics.firstVisible(id: pending.requestID)
             }
         }
     }
@@ -909,6 +980,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             text: pending.text,
             sourceText: pending.sourceText,
             audioEnd: pending.audioEnd,
+            requestID: pending.requestID,
             isCommitted: false
         )
     }
@@ -920,13 +992,25 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
     private func refreshLagState() {
         displayLag = max(latestRecognizedAudioEnd - displayedAudioEnd, 0)
-        isCatchingUp = displayLag > 1.5
+        let previousMode = lagMode
+        lagMode = LiveLagMode.next(from: lagMode, lag: displayLag)
+        isCatchingUp = lagMode != .normal
+
+        guard lagMode == .emergency, previousMode != .emergency else { return }
+        // 超过 3 秒时，正在跑的 preview 已经过期。让 stable/finalized 继续进
+        // archive，但主行从最新安全候选重新开始，不把旧 preview 队列追完。
+        translationService.cancelPreview()
+        currentLiveKey = nil
+        previewCoalesceTask?.cancel()
+        previewCoalesceTask = nil
+        lastPreviewRequestedSourceText = ""
     }
 
     private func resetPipelineSession() {
         sessionID = UUID()
-        silenceTimer?.invalidate()
-        silenceTimer = nil
+        silenceTask?.cancel()
+        silenceTask = nil
+        silenceDeadline = nil
         previewCoalesceTask?.cancel()
         previewCoalesceTask = nil
         windowPlanner.reset()
@@ -958,6 +1042,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         lastCommitAt = nil
         displayLag = 0
         isCatchingUp = false
+        lagMode = .normal
         isPreparing = false
     }
 
