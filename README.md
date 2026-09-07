@@ -4,9 +4,7 @@ LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译�
 本机助手、系统音频实时字幕和 AI 用量看板放在同一个菜单栏 App 中。翻译与语音
 内容默认只发送到本机 Ollama；本机助手默认经 agy 发往 Antigravity。
 
-当前已发布版本：[v1.7.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.7.0)
-
-1.8.0 已写入版本号，尚未打 tag 发布。
+当前已发布版本：[v1.8.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.8.0)
 
 ## 功能
 
