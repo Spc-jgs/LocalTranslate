@@ -19,6 +19,7 @@ nonisolated enum AppSettings {
         // MARK: Assistant
 
         static let assistantHandoffTarget = "assistantHandoffTarget"
+        static let assistantLocalOnly = "assistantLocalOnly"
 
         // MARK: Live Subtitles
 
@@ -51,6 +52,11 @@ nonisolated enum AppSettings {
     /// 认识 Feature 的类型，否则 Core 与 Feature 会互相依赖（AGENTS.md 第 2 节）。
     static var assistantHandoffTargetRaw: String? {
         UserDefaults.standard.string(forKey: Key.assistantHandoffTarget)
+    }
+
+    /// 默认关：助手走 agy。打开后本轮及之后都只走本机 Ollama，不拉起子进程。
+    static var assistantLocalOnly: Bool {
+        UserDefaults.standard.bool(forKey: Key.assistantLocalOnly)
     }
 
     static var baseURL: String {

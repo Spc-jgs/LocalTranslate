@@ -1,12 +1,22 @@
 import Foundation
 
-/// 助手的两种入口。判据是**按下快捷键时有没有选中文本**，与 `⌥⇧D` / `⌥⇧T`
-/// 的既有约定一致：选中了就直接算，没选中就问你要输入。
+/// 送模型时的包装方式。界面只有一个输入框；这两种不再对应两套 UI。
 nonisolated enum AssistantMode: String, Sendable, Equatable {
-    /// 选中了报错栈、日志、代码或术语，直接拿它当输入。
+    /// 框里仍是刚划下来、一字没改的原文，才附带采集到的前后文。
     case analyzeSelection
-    /// 没有选区，弹输入框：用自然语言描述想要的命令或想问的事。
+    /// 手打或改过框里的字：只送框里看得见的内容。
     case askQuestion
+}
+
+/// 自动前后文只在「框里还是原文」时附上。一改字就不带——选区两侧的快照
+/// 对不齐了，送出去是噪音。
+nonisolated enum AssistantDraft {
+    static func shouldAttachCapturedContext(
+        draft: String,
+        originalSelection: String
+    ) -> Bool {
+        !originalSelection.isEmpty && draft == originalSelection
+    }
 }
 
 /// 模型该产出哪一类东西。它决定 UI 怎么排版（命令用等宽 + 复制按钮），
@@ -15,6 +25,11 @@ nonisolated enum AssistantAnswerKind: String, Codable, Sendable {
     case command
     case diagnosis
     case explanation
+}
+
+nonisolated enum AssistantAnswerSource: String, Sendable, Equatable {
+    case agy
+    case local
 }
 
 nonisolated struct AssistantAnswer: Sendable, Equatable {
@@ -27,8 +42,210 @@ nonisolated struct AssistantAnswer: Sendable, Equatable {
     let hazard: CommandHazard?
     /// 出自哪个模型——快答和复核的结果必须能分辨。
     let modelID: String
+    let source: AssistantAnswerSource
 
     var isCommand: Bool { kind == .command }
+
+    /// 面板每次都要写出来源，不能让用户猜这次是不是出了本机。
+    var sourceCaption: String {
+        switch source {
+        case .agy: return "agy · \(modelID)"
+        case .local: return "本地 · \(modelID)"
+        }
+    }
+
+    init(
+        kind: AssistantAnswerKind,
+        primary: String,
+        note: String,
+        hazard: CommandHazard?,
+        modelID: String,
+        source: AssistantAnswerSource = .local
+    ) {
+        self.kind = kind
+        self.primary = primary
+        self.note = note
+        self.hazard = hazard
+        self.modelID = modelID
+        self.source = source
+    }
+}
+
+/// 读每次 `result.usage.input_tokens`。超过才在下一问前重启进程。
+/// 同进程内没有重置事件（TASK.md §14），所以重置 = 关进程再拉起。
+nonisolated enum AssistantSessionResetPolicy {
+    static let inputTokenThreshold = 272_000
+
+    static func shouldReset(inputTokens: Int) -> Bool {
+        inputTokens > inputTokenThreshold
+    }
+}
+
+nonisolated enum AssistantDegradeTrigger: Equatable {
+    case userLocalOnly
+    case binaryMissing
+    case startFailed
+    case statusNotSuccess
+    case timeout
+    case authenticationRequired
+    case stdoutClosed
+}
+
+nonisolated enum AssistantDegradationPolicy {
+    static func shouldAttemptAGY(
+        localOnly: Bool,
+        binaryAvailable: Bool,
+        consecutiveFailures: Int
+    ) -> Bool {
+        !localOnly
+            && binaryAvailable
+            && consecutiveFailures
+                < AGYLaunchSpec.consecutiveFailuresBeforeGivingUp
+    }
+
+    static func notice(
+        for trigger: AssistantDegradeTrigger,
+        localModel: String
+    ) -> String {
+        switch trigger {
+        case .userLocalOnly:
+            return "已按设置改用本地 \(localModel)"
+        case .binaryMissing:
+            return "agy 未安装，已改用本地 \(localModel)"
+        case .authenticationRequired:
+            return "agy 未登录，已改用本地 \(localModel)。请在终端运行一次 agy"
+        case .timeout:
+            return "agy 响应超时，已改用本地 \(localModel)"
+        case .startFailed, .statusNotSuccess, .stdoutClosed:
+            return "agy 不可用，已改用本地 \(localModel)"
+        }
+    }
+
+    static func isAuthenticationFailure(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("authentication required")
+            || lower.contains("not authenticated")
+            || lower.contains("please sign in")
+            || lower.contains("sign in required")
+    }
+}
+
+/// 本地 `format` 与 agy `--json-schema` 共用这一份。格式不写进提示词。
+nonisolated enum AssistantOutputSchema {
+    struct ModelAnswer: Decodable, Equatable {
+        let kind: AssistantAnswerKind
+        let primary: String
+        let note: String
+
+        init(kind: AssistantAnswerKind, primary: String, note: String) {
+            self.kind = kind
+            self.primary = primary
+            self.note = note
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try container.decode(AssistantAnswerKind.self, forKey: .kind)
+            primary = try container.decode(String.self, forKey: .primary)
+            note = try container.decodeIfPresent(String.self, forKey: .note)
+                ?? ""
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case kind, primary, note
+        }
+    }
+
+    static let jsonString =
+        #"{"type":"object","properties":{"kind":{"type":"string","enum":["command","diagnosis","explanation"]},"primary":{"type":"string"},"note":{"type":"string"}},"required":["kind","primary","note"]}"#
+
+    static func parse(_ text: String) throws -> ModelAnswer {
+        for object in jsonObjects(in: text) {
+            guard let data = object.data(using: .utf8),
+                  let decoded = try? JSONDecoder().decode(
+                    ModelAnswer.self,
+                    from: data
+                  )
+            else { continue }
+            return decoded
+        }
+        let trimmed = text.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        if !trimmed.isEmpty {
+            return ModelAnswer(
+                kind: .explanation,
+                primary: trimmed,
+                note: ""
+            )
+        }
+        throw AssistantParseError.invalidResponse
+    }
+
+    static func extractJSONObject(from text: String) -> String {
+        jsonObjects(in: text).first
+            ?? text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 从前往后取每一段配平的 `{...}`。agy 会在 JSON 前写一句散文，
+    /// 后面再跟带 toolAction 的对象；取第一段能解码的即可。
+    static func jsonObjects(in text: String) -> [String] {
+        var objects: [String] = []
+        var search = text.startIndex
+        while search < text.endIndex {
+            guard let start = text[search...].firstIndex(of: "{") else {
+                break
+            }
+            if let object = balancedObject(in: text, from: start) {
+                objects.append(object)
+                search = text.index(
+                    start,
+                    offsetBy: object.count,
+                    limitedBy: text.endIndex
+                ) ?? text.endIndex
+            } else {
+                search = text.index(after: start)
+            }
+        }
+        return objects
+    }
+
+    private static func balancedObject(
+        in text: String,
+        from start: String.Index
+    ) -> String? {
+        var depth = 0
+        var inString = false
+        var escape = false
+        var index = start
+        while index < text.endIndex {
+            let character = text[index]
+            if inString {
+                if escape {
+                    escape = false
+                } else if character == "\\" {
+                    escape = true
+                } else if character == "\"" {
+                    inString = false
+                }
+            } else if character == "\"" {
+                inString = true
+            } else if character == "{" {
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+                if depth == 0 {
+                    return String(text[start...index])
+                }
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+}
+
+nonisolated enum AssistantParseError: Error {
+    case invalidResponse
 }
 
 /// 破坏性判定走确定性规则，理由和早先分诊那条一样：模型的自我评估不能当安全门。
@@ -148,7 +365,7 @@ nonisolated enum AssistantHandoffPayload {
         if let answer {
             sections += [
                 "",
-                "本地模型（\(answer.modelID)）给出的答案：",
+                "\(answer.sourceCaption) 给出的答案：",
                 trim(answer.primary, maximumCharacters: 400),
                 trim(answer.note, maximumCharacters: 300)
             ]

@@ -60,12 +60,6 @@ nonisolated struct AssistantService: Sendable {
         let message: Message
     }
 
-    private struct ModelAnswer: Decodable {
-        let kind: AssistantAnswerKind
-        let primary: String
-        let note: String
-    }
-
     enum ServiceError: LocalizedError {
         case emptyInput
         case invalidResponse
@@ -101,7 +95,7 @@ nonisolated struct AssistantService: Sendable {
                 .init(role: "system", content: Self.systemPrompt),
                 .init(
                     role: "user",
-                    content: Self.userMessage(
+                    content: AssistantPromptParts.userMessage(
                         mode: mode,
                         input: trimmed,
                         context: context
@@ -127,10 +121,7 @@ nonisolated struct AssistantService: Sendable {
         guard data.count <= 1_048_576 else { throw ServiceError.oversizedResponse }
 
         let envelope = try JSONDecoder().decode(Response.self, from: data)
-        guard let content = envelope.message.content.data(using: .utf8) else {
-            throw ServiceError.invalidResponse
-        }
-        let decoded = try JSONDecoder().decode(ModelAnswer.self, from: content)
+        let decoded = try AssistantOutputSchema.parse(envelope.message.content)
         let primary = Self.trim(decoded.primary, maximumCharacters: 600)
         return AssistantAnswer(
             kind: decoded.kind,
@@ -140,38 +131,9 @@ nonisolated struct AssistantService: Sendable {
             hazard: decoded.kind == .command
                 ? DestructiveCommandPolicy.hazard(in: primary)
                 : nil,
-            modelID: model
+            modelID: model,
+            source: .local
         )
-    }
-
-    private static func userMessage(
-        mode: AssistantMode,
-        input: String,
-        context: SelectionContext?
-    ) -> String {
-        switch mode {
-        case .askQuestion:
-            return """
-                <question>
-                \(AssistantInputBounds.prefix(input, limit: 2_000))
-                </question>
-                """
-        case .analyzeSelection:
-            let adjacent = context?.adjacentText ?? ""
-            let surrounding = adjacent.isEmpty
-                ? "<context unavailable=\"true\"/>"
-                : """
-                    <context>
-                    \(AssistantInputBounds.prefix(adjacent, limit: 800))
-                    </context>
-                    """
-            return """
-                <selection>
-                \(AssistantInputBounds.prefix(input, limit: AssistantInputBounds.selectionLimit))
-                </selection>
-                \(surrounding)
-                """
-        }
     }
 
     private static func trim(_ value: String, maximumCharacters: Int) -> String {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AssistantView: View {
     @ObservedObject var viewModel: AssistantViewModel
+    @ObservedObject private var runtime = AssistantRuntime.shared
     var onClose: () -> Void
     @FocusState private var questionFocused: Bool
     @State private var showsPayload = false
@@ -21,11 +22,10 @@ struct AssistantView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         }
-        .onChange(of: viewModel.mode) {
-            showsPayload = false
-            questionFocused = viewModel.mode == .askQuestion
+        .onAppear { questionFocused = true }
+        .onChange(of: viewModel.invocationID) { _, _ in
+            questionFocused = true
         }
-        .onAppear { questionFocused = viewModel.mode == .askQuestion }
     }
 
     private var header: some View {
@@ -34,6 +34,11 @@ struct AssistantView: View {
                 .foregroundStyle(Color.accentColor)
             Text("本机助手")
                 .font(.system(size: 11, weight: .semibold))
+            if runtime.phase == .starting, !viewModel.isLoading {
+                Text("启动中")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
             if let answer = viewModel.answer {
                 Text(kindTitle(answer.kind))
                     .font(.system(size: 9, weight: .semibold))
@@ -41,11 +46,44 @@ struct AssistantView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(Color.primary.opacity(0.05), in: Capsule())
-                Text(answer.modelID)
+                Text(answer.sourceCaption)
                     .font(.system(size: 8))
                     .foregroundStyle(.tertiary)
             }
             Spacer()
+            if viewModel.answer != nil || runtime.isRunning {
+                Button("新话题") {
+                    viewModel.startNewTopic()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .help("丢掉当前 agy 会话，下一问重新开始")
+                .disabled(viewModel.isLoading)
+            }
+            Button {
+                viewModel.togglePinned()
+            } label: {
+                Image(systemName: viewModel.isPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(
+                        viewModel.isPinned
+                            ? Color.accentColor : Color.secondary
+                    )
+                    .frame(width: 22, height: 22)
+                    .background {
+                        if viewModel.isPinned {
+                            RoundedRectangle(
+                                cornerRadius: 5,
+                                style: .continuous
+                            )
+                            .fill(Color.accentColor.opacity(0.12))
+                        }
+                    }
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(viewModel.isPinned ? "取消钉住" : "钉住窗口")
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
@@ -67,12 +105,18 @@ struct AssistantView: View {
                 if viewModel.isLoading {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small)
-                        Text("本地模型正在作答…")
+                        Text(viewModel.loadingCaption)
                     }
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 } else if let answer = viewModel.answer {
                     answerSection(answer)
+                }
+
+                if let notice = viewModel.routeNotice, viewModel.answer != nil {
+                    Text(notice)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
                 }
 
                 if let error = viewModel.errorMessage {
@@ -97,52 +141,26 @@ struct AssistantView: View {
         }
     }
 
-    @ViewBuilder
     private var inputSection: some View {
-        switch viewModel.mode {
-        case .askQuestion:
-            VStack(alignment: .leading, spacing: 5) {
-                TextField(
-                    "想要什么命令？例如：把最近三个提交合并成一个",
-                    text: $viewModel.question,
-                    axis: .vertical
-                )
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .lineLimit(1...4)
-                .focused($questionFocused)
-                .onSubmit { viewModel.submit() }
-                .padding(8)
-                .background(
-                    Color.primary.opacity(0.05),
-                    in: RoundedRectangle(cornerRadius: 7)
-                )
-                Text("⌘↩ 提交 · 也可以先选中报错栈再按 ⌥⇧E")
-                    .font(.system(size: 8.5))
-                    .foregroundStyle(.tertiary)
-            }
-        case .analyzeSelection:
-            if let context = viewModel.context {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(context.selectedText)
-                        .font(.system(size: 11, design: .monospaced))
-                        .lineLimit(6)
-                        .textSelection(.enabled)
-                    Text(
-                        [context.sourceApp, context.captureSummary]
-                            .compactMap { $0 }
-                            .joined(separator: " · ")
-                    )
-                    .font(.system(size: 8.5))
-                    .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(
-                    Color.primary.opacity(0.04),
-                    in: RoundedRectangle(cornerRadius: 7)
-                )
-            }
+        VStack(alignment: .leading, spacing: 5) {
+            TextField(
+                "想问什么？例如：把最近三个提交合并成一个",
+                text: $viewModel.question,
+                axis: .vertical
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .lineLimit(2...10)
+            .focused($questionFocused)
+            .onSubmit { viewModel.submit() }
+            .padding(8)
+            .background(
+                Color.primary.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 7)
+            )
+            Text("⌘↩ 提交 · 有选区会填进框里，改过就只送你看见的字")
+                .font(.system(size: 8.5))
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -218,13 +236,11 @@ struct AssistantView: View {
             .buttonStyle(.borderless)
             .disabled(!viewModel.canSubmit && viewModel.answer == nil)
             Spacer()
-            if viewModel.mode == .askQuestion {
-                Button("提交") { viewModel.submit() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!viewModel.canSubmit)
-            }
+            Button("提交") { viewModel.submit() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!viewModel.canSubmit)
             Button {
                 viewModel.copyAndOpenHandoffTarget()
             } label: {

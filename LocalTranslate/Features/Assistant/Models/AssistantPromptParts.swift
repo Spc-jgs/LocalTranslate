@@ -62,4 +62,44 @@ nonisolated enum AssistantPromptParts {
         """,
         shared
     ]).joined(separator: "\n\n")
+
+    static func userMessage(
+        mode: AssistantMode,
+        input: String,
+        context: SelectionContext?
+    ) -> String {
+        switch mode {
+        case .askQuestion:
+            return """
+                <question>
+                \(AssistantInputBounds.prefix(input, limit: 2_000))
+                </question>
+                """
+        case .analyzeSelection:
+            let adjacent = context?.adjacentText ?? ""
+            let surrounding = adjacent.isEmpty
+                ? "<context unavailable=\"true\"/>"
+                : """
+                    <context>
+                    \(AssistantInputBounds.prefix(adjacent, limit: 800))
+                    </context>
+                    """
+            return """
+                <selection>
+                \(AssistantInputBounds.prefix(input, limit: AssistantInputBounds.selectionLimit))
+                </selection>
+                \(surrounding)
+                """
+        }
+    }
+
+    static func agyPrompt(
+        mode: AssistantMode,
+        input: String,
+        context: SelectionContext?
+    ) -> String {
+        agyPrefix
+            + "\n\n"
+            + userMessage(mode: mode, input: input, context: context)
+    }
 }

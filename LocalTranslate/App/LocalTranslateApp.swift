@@ -37,6 +37,12 @@ private struct MenuBarContent: View {
     @Environment(\.openSettings)
     private var openSettings
 
+    @ObservedObject
+    private var assistantRuntime = AssistantRuntime.shared
+
+    @AppStorage(AppSettings.Key.assistantLocalOnly)
+    private var assistantLocalOnly = false
+
     var body: some View {
 
         Button("划词翻译 (⌥⇧T)") {
@@ -79,6 +85,27 @@ private struct MenuBarContent: View {
                 name: .showTranslatePanel,
                 object: nil
             )
+        }
+
+        Divider()
+
+        Text(assistantRuntime.statusTitle)
+        if assistantRuntime.phase == .idle,
+           !assistantLocalOnly {
+            Button("启动助手") {
+                NotificationCenter.default.post(
+                    name: .startAssistant,
+                    object: nil
+                )
+            }
+        }
+        if assistantRuntime.phase != .idle {
+            Button("停止助手") {
+                NotificationCenter.default.post(
+                    name: .stopAssistant,
+                    object: nil
+                )
+            }
         }
 
         Divider()
@@ -247,6 +274,7 @@ final class AppDelegate:
         observeContentSize()
         observeMiniHUDContentSize()
         observePinState()
+        observeAssistantPinState()
 
         let hotKeyManager =
             HotKeyManager()
@@ -346,12 +374,32 @@ final class AppDelegate:
                 name: .triggerAssistant,
                 object: nil
             )
+
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector: #selector(handleStartAssistantNotification),
+                name: .startAssistant,
+                object: nil
+            )
+
+        NotificationCenter.default
+            .addObserver(
+                self,
+                selector: #selector(handleStopAssistantNotification),
+                name: .stopAssistant,
+                object: nil
+            )
+
+        Task.detached(priority: .utility) {
+            await AGYSessionProcess.shared.reclaimIfNeeded()
+        }
     }
 
     func applicationWillTerminate(
         _ notification: Notification
     ) {
-
+        assistantViewModel.shutdownResidentProcess()
         NotificationCenter
             .default
             .removeObserver(
@@ -495,6 +543,20 @@ final class AppDelegate:
         handleAssistantHotKey()
     }
 
+    @objc
+    private func handleStartAssistantNotification(
+        _ notification: Notification
+    ) {
+        assistantViewModel.startResidentProcess()
+    }
+
+    @objc
+    private func handleStopAssistantNotification(
+        _ notification: Notification
+    ) {
+        assistantViewModel.stopResidentProcess()
+    }
+
     // MARK: - Live Subtitles HotKey
 
     private func handleLiveSubtitlesHotKey() {
@@ -524,7 +586,8 @@ final class AppDelegate:
             return
         }
 
-        if let assistantPanel, assistantPanel.isVisible {
+        if let assistantPanel, assistantPanel.isVisible,
+           !assistantViewModel.isPinned {
             assistantPanel.orderOut(nil)
         }
 
@@ -538,8 +601,7 @@ final class AppDelegate:
         handleTranslateHotKey()
     }
 
-    /// 有选中文本就直接拿它开算，没有就弹输入框——和 `⌥⇧D`「有选区走气泡、
-    /// 没选区退回主面板」是同一条约定，肌肉记忆不用重学。
+    /// 有选中文本就预填进输入框，没有就空框。都不自动开算。
     ///
     /// 注意这里**不要求**辅助功能权限：问命令这条路只需要键盘输入。没授权时
     /// 读不到选区，那就退化成输入框，而不是整个功能打不开。
@@ -555,13 +617,17 @@ final class AppDelegate:
            !context.selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
                .isEmpty {
             assistantViewModel.startWithSelection(context)
+        } else if assistantViewModel.hasOpenSession {
+            assistantViewModel.focusInput()
         } else {
             assistantViewModel.startWithQuestion()
         }
 
-        assistantPanel?.positionNearMouse(
-            customSize: NSSize(width: 460, height: 380)
-        )
+        if !assistantViewModel.isPinned {
+            assistantPanel?.positionNearMouse(
+                customSize: NSSize(width: 460, height: 380)
+            )
+        }
         assistantPanel?.markDisplayed()
         assistantPanel?.makeKeyAndOrderFront(nil)
         assistantPanel?.orderFrontRegardless()
@@ -642,6 +708,20 @@ final class AppDelegate:
                 in:
                     &cancellables
             )
+    }
+
+    private func observeAssistantPinState() {
+        assistantViewModel.$isPinned
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isPinned in
+                guard let panel = self?.assistantPanel else { return }
+                panel.isPinned = isPinned
+                if isPinned, panel.isVisible {
+                    panel.orderFrontRegardless()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Dynamic Size
@@ -770,5 +850,15 @@ extension Notification.Name {
     static let triggerAssistant =
         Notification.Name(
             "triggerAssistant"
+        )
+
+    static let startAssistant =
+        Notification.Name(
+            "startAssistant"
+        )
+
+    static let stopAssistant =
+        Notification.Name(
+            "stopAssistant"
         )
 }

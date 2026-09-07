@@ -141,7 +141,23 @@ run_suite "AssistantPolicyTests" \
   LocalTranslate/Core/System/SelectionContextReader.swift \
   LocalTranslate/Features/Assistant/Models/AssistantModels.swift \
   LocalTranslate/Features/Assistant/Models/AssistantPromptParts.swift \
+  LocalTranslate/Features/Assistant/Models/AGYLaunchSpec.swift \
   Tests/AssistantPolicyTests.swift
+
+run_suite "AssistantAGYChannelTests" \
+  -framework AppKit \
+  -framework ApplicationServices \
+  LocalTranslate/Core/System/SelectionContextReader.swift \
+  LocalTranslate/Features/Assistant/Models/AssistantModels.swift \
+  LocalTranslate/Features/Assistant/Models/AssistantPromptParts.swift \
+  LocalTranslate/Features/Assistant/Models/AGYLaunchSpec.swift \
+  LocalTranslate/Features/Assistant/Models/AGYStreamJSON.swift \
+  Tests/AssistantAGYChannelTests.swift
+
+run_suite "AssistantCleanupTests" \
+  LocalTranslate/Features/Assistant/Models/AGYLaunchSpec.swift \
+  LocalTranslate/Features/Assistant/Services/AGYWorkspaceCleaner.swift \
+  Tests/AssistantCleanupTests.swift
 
 if [ "$WITH_REAL_CORPUS" -eq 1 ]; then
   run_suite "AIUsageRealCorpusSmoke" \

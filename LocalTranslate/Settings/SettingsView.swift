@@ -64,6 +64,9 @@ struct SettingsView: View {
     @ObservedObject
     private var liveSubtitles = LiveSubtitlesViewModel.shared
 
+    @ObservedObject
+    private var assistantRuntime = AssistantRuntime.shared
+
     @State
     private var selectedPage: PersonalToolPage = .translation
 
@@ -75,6 +78,9 @@ struct SettingsView: View {
 
     @AppStorage(AppSettings.Key.keepAlive)
     private var keepAlive = AppSettings.defaultKeepAlive
+
+    @AppStorage(AppSettings.Key.assistantLocalOnly)
+    private var assistantLocalOnly = false
 
     @AppStorage(AppSettings.Key.liveDiagnosticsLog)
     private var diagnosticsLogEnabled = false
@@ -195,6 +201,8 @@ struct SettingsView: View {
                 translationSection
 
                 runtimeSection
+
+                assistantSection
 
                 shortcutSection
             }
@@ -1132,6 +1140,56 @@ struct SettingsView: View {
                         alignment: .leading
                     )
                 }
+            }
+        }
+    }
+
+    // MARK: - Assistant
+
+    private var assistantSection: some View {
+        settingsSection(
+            title: "本机助手",
+            systemImage: "terminal"
+        ) {
+            VStack(spacing: 11) {
+                settingsRow(title: "只用本地") {
+                    Toggle("", isOn: $assistantLocalOnly)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: assistantLocalOnly) { _, localOnly in
+                            if localOnly {
+                                NotificationCenter.default.post(
+                                    name: .stopAssistant,
+                                    object: nil
+                                )
+                            }
+                        }
+                }
+
+                rowDivider
+
+                detailRow(
+                    title: "进程",
+                    value: assistantRuntime.processDetail
+                )
+
+                detailRow(
+                    title: "已运行",
+                    value: assistantRuntime.uptimeText
+                )
+
+                Text(
+                    "默认经 Antigravity CLI（agy）发往云端模型"
+                        + " \(AGYLaunchSpec.sourceModelID)。"
+                        + "打开后不拉起 agy，只走本机 Ollama。"
+                        + "翻译、划词和实时字幕始终在本机。"
+                        + "菜单栏可启动或停止助手；停止后按 cid 删除本 App 创建的会话文件，"
+                        + "CLI 全局日志不动。"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
