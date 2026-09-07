@@ -6,6 +6,8 @@ LocalTranslate 是一个面向 macOS 的本机轻量工具箱，把划词翻译�
 
 当前已发布版本：[v1.7.0](https://github.com/Spc-jgs/LocalTranslate/releases/tag/v1.7.0)
 
+1.8.0 已写入版本号，尚未打 tag 发布。
+
 ## 功能
 
 ### 本机翻译
