@@ -41,13 +41,13 @@ final class ScreenshotOCRService {
     }
 
     /// 调起系统原生交互框选，并对截屏进行精准 Vision OCR 识别与段落重组
-    func captureAndRecognizeText() async throws -> String? {
+    func captureAndRecognizeText() async throws -> ScreenshotOCROutcome {
         guard checkPermission(promptIfNeeded: true) else {
-            return nil
+            return .permissionDenied
         }
 
         guard !isCapturing else {
-            return nil
+            return .alreadyCapturing
         }
         isCapturing = true
         defer {
@@ -56,12 +56,16 @@ final class ScreenshotOCRService {
 
         // 1. 调起系统原生截图 (参考 Easydict 成熟实现: -i -s -x)
         guard let nsImage = await takeInteractiveScreenshot() else {
-            return nil // 用户按 ESC 取消或未截取
+            return .cancelled
         }
 
         // 2. 提取最高物理精度 CGImage
-        guard let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            return nil
+        guard let cgImage = nsImage.cgImage(
+            forProposedRect: nil,
+            context: nil,
+            hints: nil
+        ) else {
+            return .noImage
         }
 
         // 3. 在后台异步执行 Apple Vision 神经引擎 OCR 提取
@@ -84,10 +88,12 @@ final class ScreenshotOCRService {
             try handler.perform([request])
 
             guard let observations = request.results, !observations.isEmpty else {
-                return nil
+                return ScreenshotOCROutcome.noText
             }
 
-            return Self.mergeObservationsToParagraphs(observations)
+            return ScreenshotOCROutcome.normalized(
+                Self.mergeObservationsToParagraphs(observations)
+            )
         }.value
     }
 

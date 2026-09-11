@@ -98,6 +98,16 @@ run_suite "TranslationLanguageTests" \
   LocalTranslate/Features/Translate/Models/TranslationLanguage.swift \
   Tests/TranslationLanguageTests.swift
 
+run_suite "ScreenshotOCROutcomeTests" \
+  LocalTranslate/Features/Translate/Models/ScreenshotOCROutcome.swift \
+  Tests/ScreenshotOCROutcomeTests.swift
+
+run_suite "TranslationSessionTests" \
+  -framework AppKit \
+  LocalTranslate/Features/Translate/Models/TranslationStyle.swift \
+  LocalTranslate/Features/Translate/ViewModels/TranslationSession.swift \
+  Tests/TranslationSessionTests.swift
+
 run_suite "AIUsageIndexTests" \
   LocalTranslate/Features/AIUsage/Models/UsageModels.swift \
   LocalTranslate/Features/AIUsage/Services/UsageIndex.swift \

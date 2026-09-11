@@ -10,7 +10,10 @@ struct TranslationLanguageTests {
         sourceNameNeverEchoesRawCodeForKnownLanguages()
         sourceNameDegradesToCodeInsteadOfGuessing()
         detectionCoversTheDocumentedSourceLanguages()
-        print("TranslationLanguageTests: 6 passed")
+        chineseOriginalUsesEnglishSpeechWhenTargetIsChinese()
+        englishOriginalKeepsChineseSpeechWhenTargetIsChinese()
+        unrecognizedOriginalKeepsThePreferredTarget()
+        print("TranslationLanguageTests: 9 passed")
     }
 
     /// `matching` 用于判断「原文是否已经是目标语言」，漏掉任何一个都会让
@@ -102,6 +105,56 @@ struct TranslationLanguageTests {
                 "expected \(expected.rawValue) for: \(text)"
             )
         }
+    }
+
+    /// 原文已经是目标语言时，译文走 counterpart，喇叭必须跟译文而不是设置项。
+    ///
+    /// 设置里选「简体中文」、划一段中文，面板上是英文；喇叭若仍用 zh-CN，
+    /// 听起来像功能坏了。
+    private static func chineseOriginalUsesEnglishSpeechWhenTargetIsChinese() {
+        let original = "调度器会在后台 actor 中清空队列。"
+        let spoken = TranslationLanguage.resolvedTranslationLanguage(
+            forOriginal: original,
+            preferred: .simplifiedChinese
+        )
+        expect(
+            spoken == .english,
+            "中文原文 + 目标中文，译文应是英文，喇叭却是 \(spoken.rawValue)"
+        )
+        expect(
+            spoken.speechLanguageCode == "en-US",
+            "英文译文必须用 en-US，不能把设置里的 zh-Hans 直接交给合成器"
+        )
+    }
+
+    /// 普通路径：原文不是目标语言，译文就是设置里的目标语言。
+    private static func englishOriginalKeepsChineseSpeechWhenTargetIsChinese() {
+        let original = "The scheduler drains the queue on a background actor."
+        let spoken = TranslationLanguage.resolvedTranslationLanguage(
+            forOriginal: original,
+            preferred: .simplifiedChinese
+        )
+        expect(
+            spoken == .simplifiedChinese,
+            "英文原文 + 目标中文，译文应是中文，实际 \(spoken.rawValue)"
+        )
+        expect(
+            spoken.speechLanguageCode == "zh-CN",
+            "中文译文必须用 zh-CN"
+        )
+    }
+
+    /// 认不出源语言时，Ollama 只固定目标语言；喇叭必须与这条规则一致，
+    /// 不能自己再猜一次。
+    private static func unrecognizedOriginalKeepsThePreferredTarget() {
+        let spoken = TranslationLanguage.resolvedTranslationLanguage(
+            forOriginal: "12345",
+            preferred: .japanese
+        )
+        expect(
+            spoken == .japanese,
+            "认不出源语言时喇叭应跟设置的目标语言，实际 \(spoken.rawValue)"
+        )
     }
 
     private static func expect(

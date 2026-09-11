@@ -250,8 +250,9 @@ final class AppDelegate:
                         }
                     )
             )
-        miniHUD.onOrderOut = {
+        miniHUD.onOrderOut = { [weak self] in
             SpeechReader.shared.stop()
+            self?.miniHUDViewModel.cancelTranslation()
         }
 
         self.miniHUDPanel =
@@ -274,6 +275,7 @@ final class AppDelegate:
         observeContentSize()
         observeMiniHUDContentSize()
         observePinState()
+        observeMiniHUDPinState()
         observeAssistantPinState()
 
         let hotKeyManager =
@@ -501,19 +503,13 @@ final class AppDelegate:
             guard let self else { return }
 
             do {
-                guard let recognizedText = try await ScreenshotOCRService.shared.captureAndRecognizeText(),
-                      !recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    return
-                }
-
-                self.viewModel.loadSelectedText(recognizedText)
-                self.panelPresenter?.show(
-                    reposition: !self.viewModel.isPinned,
-                    activateApp: true
-                )
-                self.viewModel.translate()
+                let outcome = try await ScreenshotOCRService.shared
+                    .captureAndRecognizeText()
+                self.applyScreenshotOutcome(outcome)
             } catch {
-                // 静默忽略用户取消
+                self.presentScreenshotFailure(
+                    "文字识别失败，请再试一次。"
+                )
             }
         }
     }
@@ -670,6 +666,34 @@ final class AppDelegate:
         }
     }
 
+    private func applyScreenshotOutcome(_ outcome: ScreenshotOCROutcome) {
+        switch outcome {
+        case .cancelled, .permissionDenied, .alreadyCapturing:
+            return
+
+        case .noImage, .noText:
+            presentScreenshotFailure(outcome.userMessage)
+
+        case let .recognized(text):
+            viewModel.loadSelectedText(text)
+            panelPresenter?.show(
+                reposition: !viewModel.isPinned,
+                activateApp: true
+            )
+            viewModel.translate()
+        }
+    }
+
+    private func presentScreenshotFailure(_ message: String?) {
+        guard let message, !message.isEmpty else { return }
+        viewModel.prepareManualInput(clearExisting: true)
+        viewModel.errorMessage = message
+        panelPresenter?.show(
+            reposition: !viewModel.isPinned,
+            activateApp: true
+        )
+    }
+
     // MARK: - Pin
 
     private func observePinState() {
@@ -710,6 +734,20 @@ final class AppDelegate:
             )
     }
 
+    private func observeMiniHUDPinState() {
+        miniHUDViewModel.$isPinned
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isPinned in
+                guard let panel = self?.miniHUDPanel else { return }
+                panel.isPinned = isPinned
+                if isPinned, panel.isVisible {
+                    panel.orderFrontRegardless()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
     private func observeAssistantPinState() {
         assistantViewModel.$isPinned
             .removeDuplicates()
@@ -732,10 +770,13 @@ final class AppDelegate:
         Publishers
             .CombineLatest3(
                 viewModel
+                    .session
                     .$originalText,
                 viewModel
+                    .session
                     .$translatedText,
                 viewModel
+                    .session
                     .$isTranslating
             )
             .receive(
@@ -771,8 +812,8 @@ final class AppDelegate:
     private func observeMiniHUDContentSize() {
         Publishers
             .CombineLatest(
-                miniHUDViewModel.$originalText,
-                miniHUDViewModel.$translatedText
+                miniHUDViewModel.session.$originalText,
+                miniHUDViewModel.session.$translatedText
             )
             .receive(on: RunLoop.main)
             .sink { [weak self] original, translated in

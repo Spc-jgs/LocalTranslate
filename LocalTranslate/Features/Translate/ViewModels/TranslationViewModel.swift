@@ -2,45 +2,60 @@ import Foundation
 import Combine
 import AppKit
 
-@MainActor final class TranslationViewModel: ObservableObject {
-    @Published var originalText = ""
-
-    @Published var translatedText = ""
-
-    @Published var isTranslating = false
-
-    @Published var copied = false
+@MainActor
+final class TranslationViewModel: ObservableObject {
+    let session: TranslationSession
 
     @Published var isPinned = false
-
-    @Published var errorMessage: String?
-
     @Published var inputFocusRequest = 0
 
-    private var translationTask: Task<Void, Never>?
+    private var cancellables = Set<AnyCancellable>()
+
+    var originalText: String {
+        get { session.originalText }
+        set { session.originalText = newValue }
+    }
+
+    var translatedText: String {
+        get { session.translatedText }
+        set { session.translatedText = newValue }
+    }
+
+    var isTranslating: Bool { session.isTranslating }
+
+    var copied: Bool { session.copied }
+
+    var errorMessage: String? {
+        get { session.errorMessage }
+        set { session.errorMessage = newValue }
+    }
+
+    init(session existing: TranslationSession? = nil) {
+        let session = existing ?? .ollama()
+        self.session = session
+        session.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
 
     // MARK: - Selected Text
 
     func loadSelectedText(_ text: String) {
-        cancelTranslation()
-
+        session.cancel()
         originalText = text
-
         translatedText = ""
-
         errorMessage = nil
     }
 
     // MARK: - Manual Input
 
     func prepareManualInput(clearExisting: Bool = false) {
-        cancelTranslation()
-
+        session.cancel()
         errorMessage = nil
-
         if clearExisting {
             originalText = ""
-
             translatedText = ""
         }
     }
@@ -50,129 +65,42 @@ import AppKit
     }
 
     func updateOriginalTextFromUser(_ text: String) {
-        guard text != originalText else {
-            return
-        }
-
-        cancelTranslation()
-
+        guard text != originalText else { return }
+        session.cancel()
         originalText = text
-
         translatedText = ""
-
         errorMessage = nil
     }
 
     func clearAll() {
-        cancelTranslation()
-
-        originalText = ""
-
-        translatedText = ""
-
-        errorMessage = nil
-
+        session.reset()
         requestInputFocus()
     }
 
     // MARK: - Translate
 
     func translate() {
-        let text = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !text.isEmpty else {
-            errorMessage = "请输入需要翻译的内容"
-
+        let text = originalText.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        if text.isEmpty {
+            session.beginTranslation(
+                of: text,
+                style: AppSettings.translationStyle,
+                customPrompt: AppSettings.customPrompt,
+                emptyMessage: "请输入需要翻译的内容"
+            )
             requestInputFocus()
-
             return
         }
 
-        // 在一次翻译开始时，固定本次请求的翻译风格。
-        //
-        // 即使用户在 Streaming 中途
-        // 去设置页修改风格，当前请求也不会突然改变。
-        let translationStyle = AppSettings.translationStyle
-
-        let customPrompt = AppSettings.customPrompt
-
-        cancelTranslation()
-
-        // 旧译文的朗读不该盖在新译文上。
         SpeechReader.shared.stop()
-
-        translatedText = ""
-
-        errorMessage = nil
-
-        isTranslating = true
-
-        translationTask = Task { [weak self] in
-
-            guard let self else {
-                return
-            }
-
-            do {
-                let result = try await OllamaClient.shared.translateStream(
-                    text, style: translationStyle, customPrompt: customPrompt
-                ) { [weak self] partialResult in
-
-                    guard let self else {
-                        return
-                    }
-
-                    let currentText = self.originalText.trimmingCharacters(
-                        in: .whitespacesAndNewlines)
-
-                    // 用户中途修改了原文，旧翻译流失效。
-                    guard currentText == text else {
-                        return
-                    }
-
-                    self.translatedText = partialResult
-                }
-
-                guard !Task.isCancelled else {
-                    return
-                }
-
-                let currentText = self.originalText.trimmingCharacters(
-                    in: .whitespacesAndNewlines)
-
-                guard currentText == text else {
-                    return
-                }
-
-                self.translatedText = result
-
-                self.isTranslating = false
-
-                self.translationTask = nil
-            } catch is CancellationError {
-                self.isTranslating = false
-
-                self.translationTask = nil
-            } catch {
-                guard !Task.isCancelled else {
-                    return
-                }
-
-                self.errorMessage = OllamaFailure.message(for: error)
-
-                self.isTranslating = false
-
-                self.translationTask = nil
-            }
-        }
-    }
-
-    private func cancelTranslation() {
-        translationTask?.cancel()
-
-        translationTask = nil
-
-        isTranslating = false
+        session.beginTranslation(
+            of: text,
+            style: AppSettings.translationStyle,
+            customPrompt: AppSettings.customPrompt,
+            emptyMessage: "请输入需要翻译的内容"
+        )
     }
 
     // MARK: - Pin
@@ -184,19 +112,9 @@ import AppKit
     // MARK: - Copy
 
     func copyTranslation() {
-        guard !translatedText.isEmpty else {
-            return
-        }
-
-        NSPasteboard.general.clearContents()
-
-        NSPasteboard.general.setString(translatedText, forType: .string)
-
-        copied = true
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-
-            self?.copied = false
-        }
+        session.copyTranslation(
+            allowOriginalFallback: false,
+            feedbackDuration: 1.5
+        )
     }
 }

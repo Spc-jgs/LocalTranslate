@@ -108,6 +108,62 @@ nonisolated enum TranslationLanguage:
         }
         return code
     }
+
+    /// 这次译文实际会是哪种语言。
+    ///
+    /// 与 Ollama 请求的方向必须一致：原文已经是 `preferred` 时走
+    /// `counterpart`，认不出源语言时保持 `preferred`。喇叭如果自己再猜一次，
+    /// 就会用中文语音去念一段英文译文。
+    static func resolvedTranslationLanguage(
+        forOriginal text: String,
+        preferred: TranslationLanguage
+    ) -> TranslationLanguage {
+        guard let detected = detectSourceLanguage(text) else {
+            return preferred
+        }
+        if matching(detected) == preferred {
+            return preferred.counterpart
+        }
+        return preferred
+    }
+
+    /// 翻译方向用的源语言识别。短句常失败，中日韩按汉字占比兜底。
+    static func detectSourceLanguage(_ text: String) -> NLLanguage? {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return nil }
+
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(cleaned)
+        if let dominant = recognizer.dominantLanguage,
+           dominant != .undetermined {
+            return dominant
+        }
+
+        if containsMeaningfulChinese(cleaned) {
+            return .simplifiedChinese
+        }
+        return nil
+    }
+
+    /// 汉字占有意义字符的比例。低于这个值不把它当成中文——否则
+    /// `actor` 旁边偶尔出现的一个字会把整段英文判成中文。
+    private static let meaningfulChineseRatio = 0.15
+
+    private static func containsMeaningfulChinese(_ text: String) -> Bool {
+        let chineseCount = text.unicodeScalars.filter { scalar in
+            let value = scalar.value
+            return (value >= 0x4E00 && value <= 0x9FFF)
+                || (value >= 0x3400 && value <= 0x4DBF)
+        }.count
+
+        let meaningfulCount = text.filter { character in
+            !character.isWhitespace && !character.isPunctuation
+        }.count
+
+        guard meaningfulCount > 0 else { return false }
+        return Double(chineseCount) / Double(meaningfulCount)
+            >= meaningfulChineseRatio
+    }
 }
 
 // MARK: - 朗读原文时的语言判定

@@ -78,6 +78,7 @@ struct MiniHUDView: View {
             }
             .buttonStyle(.plain)
             .help("展开至主翻译窗口 (⌥↩)")
+            .accessibilityLabel("展开至主翻译窗口")
 
             // Pin
             Button {
@@ -97,6 +98,7 @@ struct MiniHUDView: View {
             }
             .buttonStyle(.plain)
             .help(viewModel.isPinned ? "取消钉住" : "钉住气泡")
+            .accessibilityLabel(viewModel.isPinned ? "取消钉住" : "钉住气泡")
 
             // Close
             Button {
@@ -110,6 +112,7 @@ struct MiniHUDView: View {
             }
             .buttonStyle(.plain)
             .help("关闭 (Esc)")
+            .accessibilityLabel("关闭")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -210,10 +213,13 @@ struct MiniHUDView: View {
             Spacer()
 
             // 气泡太窄，只放一个喇叭；原文在这里只显示两行，本来就是配角，
-            // 所以读的是译文——它的语言也无需判断。
+            // 所以读的是译文。语言必须跟实际翻译方向，不能直接用设置项。
             SpeakButton(
                 text: viewModel.translatedText,
-                languageCode: AppSettings.targetLanguage.speechLanguageCode,
+                languageCode: TranslationLanguage.resolvedTranslationLanguage(
+                    forOriginal: viewModel.originalText,
+                    preferred: AppSettings.targetLanguage
+                ).speechLanguageCode,
                 id: "hud.translation"
             )
 
@@ -228,6 +234,7 @@ struct MiniHUDView: View {
             .buttonStyle(.plain)
             .disabled(viewModel.isTranslating || viewModel.originalText.isEmpty)
             .help("重新翻译")
+            .accessibilityLabel("重新翻译")
 
             // Copy Button
             Button {

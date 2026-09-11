@@ -1,5 +1,4 @@
 import Foundation
-import NaturalLanguage
 
 // MARK: - Chat Models
 
@@ -549,68 +548,34 @@ enum OllamaClientError: LocalizedError {
 
     /// 解析本次翻译的语言对。
     ///
-    /// 原文已经是目标语言时翻到 `counterpart`：选中文的人选中一段中文，要的是英文，而不是把中文再润色一遍。
+    /// 方向判定的唯一出处是 `TranslationLanguage.resolvedTranslationLanguage`：
+    /// Prompt 和译文喇叭必须得到同一种语言，否则会出现「屏幕是英文、喇叭念中文」。
     private func resolveDirection(_ text: String) -> TranslationDirection {
         let target = AppSettings.targetLanguage
-
         let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = TranslationLanguage.resolvedTranslationLanguage(
+            forOriginal: cleanedText,
+            preferred: target
+        )
 
-        guard let detected = detectLanguage(cleanedText) else {
-            // 认不出来就不假装知道，只固定目标语言。
+        guard let detected = TranslationLanguage.detectSourceLanguage(
+            cleanedText
+        ) else {
             return TranslationDirection(
-                sourceName: nil, targetName: target.displayName)
+                sourceName: nil,
+                targetName: resolved.displayName
+            )
         }
 
-        if TranslationLanguage.matching(detected) == target {
-            let counterpart = target.counterpart
-
-            return TranslationDirection(
-                sourceName: target.displayName,
-                targetName: counterpart.displayName)
-        }
+        let sourceName =
+            TranslationLanguage.matching(detected) == target
+            ? target.displayName
+            : TranslationLanguage.sourceName(for: detected)
 
         return TranslationDirection(
-            sourceName: TranslationLanguage.sourceName(for: detected),
-            targetName: target.displayName)
-    }
-
-    private func detectLanguage(_ text: String) -> NLLanguage? {
-        guard !text.isEmpty else { return nil }
-
-        let recognizer = NLLanguageRecognizer()
-
-        recognizer.processString(text)
-
-        if let dominant = recognizer.dominantLanguage, dominant != .undetermined
-        {
-            return dominant
-        }
-
-        // 短句常识别不出来，而中日韩可以按字形兜底。
-        if containsMeaningfulChinese(text) {
-            return .simplifiedChinese
-        }
-
-        return nil
-    }
-
-    private func containsMeaningfulChinese(_ text: String) -> Bool {
-        let chineseCount = text.unicodeScalars.filter { scalar in
-
-            let value = scalar.value
-
-            return (value >= 0x4E00 && value <= 0x9FFF)
-                || (value >= 0x3400 && value <= 0x4DBF)
-        }.count
-
-        let meaningfulCount = text.filter { character in
-
-            !character.isWhitespace && !character.isPunctuation
-        }.count
-
-        guard meaningfulCount > 0 else { return false }
-
-        return Double(chineseCount) / Double(meaningfulCount) >= 0.15
+            sourceName: sourceName,
+            targetName: resolved.displayName
+        )
     }
 
     // MARK: - URL

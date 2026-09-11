@@ -150,6 +150,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .help(viewModel.isPinned ? "取消钉住" : "钉住窗口")
+            .accessibilityLabel(viewModel.isPinned ? "取消钉住" : "钉住窗口")
 
             // Close
             Button {
@@ -163,6 +164,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .help("关闭")
+            .accessibilityLabel("关闭")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
@@ -288,12 +290,19 @@ struct ContentView: View {
     // MARK: - Translation
 
     /// 原文朗读用哪种语音。判不出来时 `SpeakButton` 自己不显示。
-    ///
-    /// 译文那边不需要这一步——它的语言就是用户设的目标语言。
     private var sourceSpeechCode: String? {
         TranslationLanguage
             .speechLanguage(forSource: viewModel.originalText)?
             .speechLanguageCode
+    }
+
+    /// 译文朗读必须跟 Ollama 实际翻到的语言，而不是设置项本身。
+    /// 原文已经是目标语言时译文走 counterpart。
+    private var translationSpeechCode: String {
+        TranslationLanguage.resolvedTranslationLanguage(
+            forOriginal: viewModel.originalText,
+            preferred: AppSettings.targetLanguage
+        ).speechLanguageCode
     }
 
     private var translationSection: some View {
@@ -307,8 +316,7 @@ struct ContentView: View {
                 // 标题行一旦长高就会挤掉底部。
                 SpeakButton(
                     text: viewModel.translatedText,
-                    languageCode: AppSettings.targetLanguage
-                        .speechLanguageCode,
+                    languageCode: translationSpeechCode,
                     id: "panel.translation",
                     size: 9
                 )

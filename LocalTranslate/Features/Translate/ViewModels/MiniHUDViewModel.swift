@@ -4,64 +4,55 @@ import AppKit
 
 @MainActor
 final class MiniHUDViewModel: ObservableObject {
+    let session: TranslationSession
 
-    @Published var originalText = ""
-    @Published var translatedText = ""
-    @Published var isTranslating = false
-    @Published var copied = false
     @Published var isPinned = false
-    @Published var errorMessage: String?
 
-    private var translationTask: Task<Void, Never>?
-    private var copyFeedbackGeneration = 0
+    private var cancellables = Set<AnyCancellable>()
+
+    var originalText: String {
+        get { session.originalText }
+        set { session.originalText = newValue }
+    }
+
+    var translatedText: String {
+        get { session.translatedText }
+        set { session.translatedText = newValue }
+    }
+
+    var isTranslating: Bool { session.isTranslating }
+
+    var copied: Bool { session.copied }
+
+    var errorMessage: String? {
+        get { session.errorMessage }
+        set { session.errorMessage = newValue }
+    }
+
+    init(session existing: TranslationSession? = nil) {
+        let session = existing ?? .ollama()
+        self.session = session
+        session.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
 
     func loadAndTranslate(_ text: String) {
         SpeechReader.shared.stop()
-        cancelTranslation()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         originalText = trimmed
-        translatedText = ""
-        errorMessage = nil
-
-        guard !trimmed.isEmpty else {
-            errorMessage = "未检测到选中文本"
-            return
-        }
-
-        let translationStyle = AppSettings.translationStyle
-        let customPrompt = AppSettings.customPrompt
-        isTranslating = true
-
-        translationTask = Task { [weak self] in
-            guard let self else { return }
-
-            do {
-                let result = try await OllamaClient.shared.translateStream(
-                    trimmed,
-                    style: translationStyle,
-                    customPrompt: customPrompt
-                ) { [weak self] partialResult in
-                    guard let self else { return }
-                    guard self.originalText == trimmed else { return }
-                    self.translatedText = partialResult
-                }
-
-                guard !Task.isCancelled else { return }
-                guard self.originalText == trimmed else { return }
-                self.translatedText = result
-                self.isTranslating = false
-            } catch {
-                guard !Task.isCancelled else { return }
-                self.errorMessage = OllamaFailure.message(for: error)
-                self.isTranslating = false
-            }
-        }
+        session.beginTranslation(
+            of: trimmed,
+            style: AppSettings.translationStyle,
+            customPrompt: AppSettings.customPrompt,
+            emptyMessage: "未检测到选中文本"
+        )
     }
 
     func cancelTranslation() {
-        translationTask?.cancel()
-        translationTask = nil
-        isTranslating = false
+        session.cancel()
     }
 
     func togglePinned() {
@@ -69,28 +60,14 @@ final class MiniHUDViewModel: ObservableObject {
     }
 
     func copyTranslation() {
-        let text = translatedText.isEmpty ? originalText : translatedText
-        guard !text.isEmpty else { return }
-
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-
-        copied = true
-        copyFeedbackGeneration += 1
-        let generation = copyFeedbackGeneration
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self, self.copyFeedbackGeneration == generation else { return }
-            self.copied = false
-        }
+        session.copyTranslation(
+            allowOriginalFallback: true,
+            feedbackDuration: 1.2
+        )
     }
 
     func reset() {
-        cancelTranslation()
-        originalText = ""
-        translatedText = ""
-        errorMessage = nil
-        copied = false
+        session.reset()
+        isPinned = false
     }
 }
