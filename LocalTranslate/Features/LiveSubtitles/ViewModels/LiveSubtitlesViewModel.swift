@@ -98,6 +98,8 @@ public final class LiveSubtitlesViewModel: ObservableObject,
     /// 节奏诊断。默认关闭，开着才创建文件、才持有句柄。
     private let diagnostics = LiveSubtitleDiagnosticsLog.shared
     private var lastAnchorSourceText = ""
+    /// 切页后剩余页不够一个翻译窗时，先不要用 3 词尾巴开新 caption。
+    private var waitForFullWindowAfterPageTurn = false
     /// 每次「改写」自增，View 拿它当动画身份——追加时不变，整行替换才淡入。
     @Published public private(set) var captionRewriteCount = 0
 
@@ -571,7 +573,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         lastCommittedCaption = resolved
         // 翻页和上一行更新是同一个动作的两面：这句进了上一行，主行就从它之后
         // 重新开始。分开做的话，主行要么凭空缩水，要么把已经定稿的话又显示一遍。
-        diagnostics.pageTurn(words: pager.wordCount)
+        diagnostics.pageTurn(words: pager.wordCount, id: key.diagnosticsID)
         pager.turnPage(through: key.audioRange.end)
         diagnostics.segmentCommitted(
             words: pending.sourceText
@@ -579,6 +581,10 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             characters: resolved.count,
             lag: displayLag
         )
+
+        // 这一句已经进了上一行。主行从剩余页重新开始预览，不能续写上一句，
+        // 也不能等正在跑的旧 preview 结束——那会空好几秒再整行 replace。
+        startFreshPreviewAfterPageTurn()
 
         // 主行只在说话停下来时才让整句接管：讲话还在继续时，preview 已经跑到
         // 更后面，把主行拉回刚说完的那句就是倒退。
@@ -590,7 +596,6 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 windowEnd: key.audioRange.end,
                 displayedEnd: displayedAudioEnd
             )
-            refreshLiveSource()
             return
         }
         guard key.audioRange.end > displayedAudioEnd + 0.2 else {
@@ -599,20 +604,30 @@ public final class LiveSubtitlesViewModel: ObservableObject,
                 windowEnd: key.audioRange.end,
                 displayedEnd: displayedAudioEnd
             )
-            refreshLiveSource()
             return
         }
         diagnostics.commitAccepted(
             windowEnd: key.audioRange.end,
             displayedEnd: displayedAudioEnd
         )
-        presentTranslation(
-            text: resolved,
-            sourceText: pending.sourceText,
-            audioEnd: key.audioRange.end,
-            requestID: key.diagnosticsID,
-            isCommitted: true
-        )
+    }
+
+    /// 切页后旧 preview 不得再写主行。
+    ///
+    /// 不能清空已上屏译文：171 秒实测一清空，剩余页不够 6 词就发不出下一句，
+    /// 主行空白期间 displayLag 涨到数秒，追赶变成常态。旧字留到新预览首字
+    /// 到达再替换。也不能用 3 词尾巴当新 caption，那会变成两三个字的 replace。
+    private func startFreshPreviewAfterPageTurn() {
+        translationService.cancelPreview()
+        currentLiveKey = nil
+        previewCoalesceTask?.cancel()
+        previewCoalesceTask = nil
+        previewSegmentID = UUID()
+        previewRevision = 0
+        lastPreviewRequestedSourceText = ""
+        displayedTranslationSourceText = ""
+        lastAnchorSourceText = ""
+        waitForFullWindowAfterPageTurn = true
         refreshLiveSource()
     }
 
@@ -644,9 +659,12 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         // complete, which leaves the overlay permanently source-only.
         if currentLiveKey != nil { return }
 
+        let minimumWordCount = waitForFullWindowAfterPageTurn
+            ? LivePreviewStabilityPolicy.minimumWordsAfterPageTurn
+            : 3
         guard LivePreviewStabilityPolicy.isReady(
             sourceText,
-            minimumWordCount: 3
+            minimumWordCount: minimumWordCount
         ) else { return }
         schedulePreviewSubmission()
     }
@@ -701,6 +719,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
             audioRange: sourceRange
         )
         currentLiveKey = key
+        waitForFullWindowAfterPageTurn = false
         diagnostics.windowReady(id: key.diagnosticsID, audioEnd: key.audioRange.end)
         lastPreviewRequestedSourceText = sourceText
         let mayStreamInitialTranslation = currentTranslatedText.isEmpty
@@ -877,18 +896,23 @@ public final class LiveSubtitlesViewModel: ObservableObject,
 
         // commit 的整句要定格一会儿，否则下一句 preview 一到就把它顶掉，
         // 完整译文等于从没出现过。
-        if !isCommitted, let committedAt = lastCommitAt,
-           LiveCaptionPresenter.holdsCommittedCaption(
-               sinceCommit: committedAt.duration(to: now)
-           ) {
-            pendingCaption = PendingCaption(
-                text: text,
-                sourceText: sourceText,
-                audioEnd: audioEnd,
-                requestID: requestID
-            )
-            diagnostics.hold(cause: "commitHold")
-            return
+        if !isCommitted, let committedAt = lastCommitAt {
+            let sinceCommit = committedAt.duration(to: now)
+            if LiveCaptionPresenter.holdsCommittedCaption(sinceCommit: sinceCommit) {
+                pendingCaption = PendingCaption(
+                    text: text,
+                    sourceText: sourceText,
+                    audioEnd: audioEnd,
+                    requestID: requestID
+                )
+                let remaining = LiveCaptionPresenter.commitHoldInterval
+                    - sinceCommit
+                diagnostics.hold(
+                    cause: "commitHold",
+                    remainingMS: max(0, milliseconds(remaining))
+                )
+                return
+            }
         }
 
         let shownFor = contentShownAt.map { $0.duration(to: now) }
@@ -1023,6 +1047,7 @@ public final class LiveSubtitlesViewModel: ObservableObject,
         previewRevision = 0
         lastPreviewRequestedSourceText = ""
         displayedTranslationSourceText = ""
+        waitForFullWindowAfterPageTurn = false
         latestLiveSourceText = ""
         latestLiveSourceRange = .zero
         latestRecognizedAudioEnd = 0

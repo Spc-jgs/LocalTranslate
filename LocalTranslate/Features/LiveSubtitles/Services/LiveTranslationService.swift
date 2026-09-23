@@ -343,16 +343,16 @@ public final class LiveTranslationService {
         pendingForeground = job
         trace("foreground-enqueued", key: job.key)
 
-        if let activeJob, activeJob.key != job.key, !activeJob.isStable {
-            // The overlay follows the newest stable/preview window. A stable
-            // request displaced from the live slot is retained as archive
-            // work; an obsolete preview is intentionally discarded.
-            //
-            // 但正在跑的整句定稿不抢占：它只要几百毫秒，主行等着它翻页，
-            // 而它被 cancel 之后 completion 不会触发（drainQueue 检查
-            // workerGeneration 就返回了），调用方的待办记录会一直挂着，
-            // 那一句永远翻不了页。preview 等它跑完，比杀掉重排划算。
-            preemptActiveJob(requeue: activeJob.archivable)
+        if let activeJob, activeJob.key != job.key {
+            switch LiveTranslationLanePolicy.preempt(
+                active: lane(of: activeJob),
+                incoming: lane(of: job)
+            ) {
+            case .none:
+                break
+            case .requeue:
+                preemptActiveJob(requeue: true)
+            }
         }
         startWorkerIfNeeded()
     }
@@ -392,11 +392,20 @@ public final class LiveTranslationService {
         }
     }
 
+    private func lane(of job: TranslationJob) -> LiveTranslationLane {
+        if job.isStable { return .stable }
+        if job.key.kind == .preview { return .preview }
+        return .archive
+    }
+
     private func startWorkerIfNeeded() {
         guard workerTask == nil,
-              pendingForeground != nil
-                || !stableQueue.isEmpty
-                || (!liveActivity && !archiveQueue.isEmpty) else { return }
+              LiveTranslationLanePolicy.nextLane(
+                  liveActivity: liveActivity,
+                  hasPreview: pendingForeground != nil,
+                  hasStable: !stableQueue.isEmpty,
+                  hasArchive: !archiveQueue.isEmpty
+              ) != nil else { return }
         let generation = workerGeneration
         workerTask = Task { [weak self] in
             await self?.drainQueue(generation: generation)
@@ -433,19 +442,26 @@ public final class LiveTranslationService {
                       !liveActivity else { return }
             }
 
+            guard let next = LiveTranslationLanePolicy.nextLane(
+                liveActivity: liveActivity,
+                hasPreview: pendingForeground != nil,
+                hasStable: !stableQueue.isEmpty,
+                hasArchive: !archiveQueue.isEmpty
+            ) else { return }
+
             let job: TranslationJob
-            if let foreground = pendingForeground {
+            switch next {
+            case .preview:
+                guard let foreground = pendingForeground else { return }
                 pendingForeground = nil
                 activeIsArchive = false
                 job = foreground
-            } else if !stableQueue.isEmpty {
+            case .stable:
                 activeIsArchive = false
                 job = stableQueue.removeFirst()
-            } else if !archiveQueue.isEmpty {
+            case .archive:
                 activeIsArchive = true
                 job = archiveQueue.removeFirst()
-            } else {
-                return
             }
 
             activeJob = job

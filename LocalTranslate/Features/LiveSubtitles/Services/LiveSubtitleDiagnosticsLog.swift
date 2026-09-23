@@ -36,6 +36,21 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
             .map(\.url)
     }
 
+    /// 会话总表里一个阶段的 p50/p90。没有样本写 n/a，不断言具体毫秒。
+    static func stagePercentileLine(name: String, samplesMS: [Int]) -> String {
+        "\(name) p50=\(percentileMS(samplesMS, 0.5)) p90=\(percentileMS(samplesMS, 0.9))"
+    }
+
+    private static func percentileMS(_ values: [Int], _ q: Double) -> String {
+        guard !values.isEmpty else { return "n/a" }
+        let sorted = values.map(Double.init).sorted()
+        let index = min(
+            sorted.count - 1,
+            max(0, Int((Double(sorted.count - 1) * q).rounded()))
+        )
+        return String(format: "%.2fms", sorted[index])
+    }
+
     static var directoryURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".localtranslate", isDirectory: true)
@@ -83,6 +98,10 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private var queueWaitMS: [Int] = []
     private var ingressToVisibleMS: [Int] = []
     private var ingressToCommitMS: [Int] = []
+    /// 预览被整句定格挡住时，定格还剩多少毫秒。用来和「翻页等待」拆开。
+    private var commitHoldRemainingMS: [Int] = []
+    /// 整句从 windowReady 到翻页的等待。主行靠它才能切走已定稿的那一段。
+    private var pageTurnWaitMS: [Int] = []
 
     private struct AudioMark {
         let audioEnd: TimeInterval
@@ -92,6 +111,7 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     private struct RequestTiming {
         let audioEnd: TimeInterval
         let ingressAt: UInt64?
+        var readyAt: UInt64?
         var queuedAt: UInt64?
         var requestStartedAt: UInt64?
         var firstTokenAt: UInt64?
@@ -204,6 +224,18 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
                     + "ingressToCommit p50=\(percentileMS(ingressToCommitMS, 0.5)) "
                     + "p90=\(percentileMS(ingressToCommitMS, 0.9))"
             )
+            write(
+                Self.stagePercentileLine(
+                    name: "commitHold",
+                    samplesMS: commitHoldRemainingMS
+                )
+            )
+            write(
+                Self.stagePercentileLine(
+                    name: "pageTurnWait",
+                    samplesMS: pageTurnWaitMS
+                )
+            )
             write("stopped reason=\(reason)")
             try? handle?.close()
             handle = nil
@@ -305,12 +337,16 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     }
 
     /// 一次上屏被压住了。`cause` 是 throttle（改写太密）或 commitHold（整句定格中）。
-    func hold(cause: String) {
+    /// `remainingMS` 只在定格挡住预览时传入，记录当时还要再等多久。
+    func hold(cause: String, remainingMS: Int? = nil) {
         guard isLoggingEnabled() else { return }
         queue.async { [self] in
             guard handle != nil else { return }
             if cause == "commitHold" {
                 holdsByCommitHold += 1
+                if let remainingMS {
+                    commitHoldRemainingMS.append(remainingMS)
+                }
             } else {
                 holdsByThrottle += 1
             }
@@ -333,12 +369,18 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
     /// 一句话定稿。这一行回答「这句在屏幕上折腾了几次」。
     /// 主行翻页。翻页应该和上一行更新同时发生——这一行用来验证它有没有真的
     /// 发生，以及每页攒了多少词。
-    func pageTurn(words: Int) {
+    func pageTurn(words: Int, id: String? = nil) {
         guard isLoggingEnabled() else { return }
+        let timestamp = Self.monotonicNow()
         queue.async { [self] in
             guard handle != nil else { return }
             pageTurns += 1
             pageWordsAtTurn.append(Double(words))
+            if let id,
+               let readyAt = requests[id]?.readyAt,
+               let elapsed = elapsedMS(from: readyAt, to: timestamp) {
+                pageTurnWaitMS.append(elapsed)
+            }
             write("page turn words=\(words)")
         }
     }
@@ -412,7 +454,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
             guard handle != nil else { return }
             requests[id] = RequestTiming(
                 audioEnd: audioEnd,
-                ingressAt: ingressTimestamp(for: audioEnd)
+                ingressAt: ingressTimestamp(for: audioEnd),
+                readyAt: Self.monotonicNow()
             )
             if requests.count > 256 {
                 requests.removeValue(forKey: requests.keys.first ?? id)
@@ -510,6 +553,8 @@ nonisolated final class LiveSubtitleDiagnosticsLog: @unchecked Sendable {
         queueWaitMS.removeAll()
         ingressToVisibleMS.removeAll()
         ingressToCommitMS.removeAll()
+        commitHoldRemainingMS.removeAll()
+        pageTurnWaitMS.removeAll()
         ingressedAudioEnd = 0
         audioMarks.removeAll()
         requests.removeAll()

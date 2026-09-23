@@ -609,6 +609,12 @@ nonisolated struct LiveSubtitleSemanticSegmenter {
 }
 
 nonisolated struct LivePreviewStabilityPolicy {
+    /// 切页后剩余页少于此词数，先不要开新预览。
+    ///
+    /// 3 词就会把「上一句尾巴」当成新 caption，实测 171 秒里一句话平均变
+    /// 5.95 次、出现 2 个字的 replace，主行空着时 displayLag 涨到追赶常态。
+    static let minimumWordsAfterPageTurn = 6
+
     private static let sentenceTerminators: Set<Character> = [
         ".", "?", "!", "。", "？", "！"
     ]
@@ -666,6 +672,12 @@ nonisolated struct LivePreviewStabilityPolicy {
                 previous: previousWords,
                 candidate: candidateWords
             )
+            let droppedPrefix = previousWords.count - overlap
+            // 切页：已定稿的那一截从左边离开主行。剩余页和旧页 overlap 很高、
+            // 新增词数为 0，不能当成「还没攒够三个新词」。
+            if overlap >= 3, droppedPrefix >= 3 {
+                return true
+            }
             if overlap >= 3 {
                 return candidateWords.count - overlap >= minimumAddedWords
             }

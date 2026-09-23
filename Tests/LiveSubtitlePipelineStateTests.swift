@@ -16,13 +16,15 @@ struct LiveSubtitlePipelineStateTests {
         plannerNeverDropsOrDuplicatesWords()
         previewReadinessRejectsIncompletePhrases()
         compatiblePreviewGrowthRetainsDisplayedTranslation()
+        pageTurnMustStartANewPreviewRequest()
+        pageTurnDoesNotPreviewAShortLeftover()
         requestRevisionAndRangeRejectStaleKey()
         finalIdentityRejectsDuplicateAndOldSession()
         previewAnchorHoldsItsStartWhileTheSentenceGrows()
         stableBacklogReturnsOldestForArchive()
         lagModeUsesHysteresisAndEmergencyCutover()
         audioLevelUpdatesAreThrottled()
-        print("LiveSubtitlePipelineStateTests: 31 passed")
+        print("LiveSubtitlePipelineStateTests: 33 passed")
     }
 
     private static func lagModeUsesHysteresisAndEmergencyCutover() {
@@ -351,6 +353,61 @@ struct LiveSubtitlePipelineStateTests {
                 while: "It was originally designed as a replacement"
             ),
             "meaningful correction must clear incompatible translation"
+        )
+    }
+
+    /// 整句进上一行并切页后，主行源文本从左边掉了一截。
+    ///
+    /// 若仍拿切页前的 22 词当 previous，剩余 10 词和它的 rolling overlap
+    /// 很高、新增词数为 0，shouldRequest 会返回 false——再叠上 in-flight
+    /// preview 不取消，主行会卡在上一句译文上好几秒，然后整行 replace。
+    /// 实测 97 秒里 20/24 次改写公共前缀为 0，开头还有一次 7 秒空白。
+    private static func pageTurnMustStartANewPreviewRequest() {
+        let before = words(1...22)
+        let remaining = words(13...22)
+        expect(
+            !LivePreviewStabilityPolicy.canRetainDisplayedTranslation(
+                displayedSource: before,
+                while: remaining
+            ),
+            "切页后还在用上一句译文续写"
+        )
+        expect(
+            LivePreviewStabilityPolicy.shouldRequest(
+                candidate: remaining,
+                after: before
+            ),
+            "切页后剩余页没有立刻发新预览"
+        )
+        let remainingPlusVolatile = words(13...25)
+        expect(
+            LivePreviewStabilityPolicy.shouldRequest(
+                candidate: remainingPlusVolatile,
+                after: before
+            ),
+            "切页后带上 volatile 仍不发新预览"
+        )
+    }
+
+    /// 剩余页只有三四个词时，不能当成新 caption 上屏。
+    /// 否则主行先被清空，再显示两三个字，displayLag 在空窗里涨成追赶常态。
+    private static func pageTurnDoesNotPreviewAShortLeftover() {
+        let leftover = words(20...22)
+        expect(
+            !LivePreviewStabilityPolicy.isReady(
+                leftover,
+                minimumWordCount:
+                    LivePreviewStabilityPolicy.minimumWordsAfterPageTurn
+            ),
+            "切页后 3 词尾巴不该开新预览"
+        )
+        expect(
+            LivePreviewStabilityPolicy.isReady(
+                words(13...22),
+                minimumWordCount:
+                    LivePreviewStabilityPolicy.minimumWordsAfterPageTurn
+            ),
+            "切页后剩余一整页应该能开新预览"
         )
     }
 

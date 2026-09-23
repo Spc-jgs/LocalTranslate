@@ -295,15 +295,16 @@ struct SettingsView: View {
                         : (liveSubtitles.isRunning ? "同传中" : "未运行")
                 )
 
-                // displayLag 一直在算，却只被派生成「追赶中」标签用掉。调字幕
-                // 节奏时靠感觉判断有没有改善并不可靠，把秒数直接摆出来。
+                // 与字幕条工具栏同一句文案。调字幕节奏时靠感觉不可靠。
                 if liveSubtitles.isRunning {
                     rowDivider
 
                     detailRow(
                         title: "字幕落后语音",
-                        value: String(format: "%.1f 秒", liveSubtitles.displayLag)
-                            + (liveSubtitles.isCatchingUp ? "（追赶中）" : "")
+                        value: LiveLagCaption.text(
+                            lag: liveSubtitles.displayLag,
+                            catchingUp: liveSubtitles.isCatchingUp
+                        )
                     )
                 }
 

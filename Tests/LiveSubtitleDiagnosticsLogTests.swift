@@ -6,7 +6,9 @@ struct LiveSubtitleDiagnosticsLogTests {
         keepsOnlyTheMostRecentSessions()
         leavesRoomForTheSessionAboutToStart()
         doesNothingBelowTheLimit()
-        print("LiveSubtitleDiagnosticsLogTests: 3 passed")
+        emptyStageSamplesWriteNA()
+        populatedStageSamplesWritePercentiles()
+        print("LiveSubtitleDiagnosticsLogTests: 5 passed")
     }
 
     /// 目录只增不减不会有任何征兆，直到某天占了几个 G。
@@ -63,6 +65,32 @@ struct LiveSubtitleDiagnosticsLogTests {
                 .isEmpty,
             "没到上限就开始删文件了"
         )
+    }
+
+    /// 没有样本时写 n/a，不断言毫秒——否则没开过诊断的总会表会骗人。
+    private static func emptyStageSamplesWriteNA() {
+        let line = LiveSubtitleDiagnosticsLog.stagePercentileLine(
+            name: "commitHold",
+            samplesMS: []
+        )
+        expect(
+            line == "commitHold p50=n/a p90=n/a",
+            "空样本格式不对：\(line)"
+        )
+    }
+
+    /// 有样本只检查总表里出现该阶段的 p50/p90，具体毫秒随语料变。
+    private static func populatedStageSamplesWritePercentiles() {
+        let line = LiveSubtitleDiagnosticsLog.stagePercentileLine(
+            name: "pageTurnWait",
+            samplesMS: [100, 200, 800]
+        )
+        expect(
+            line.hasPrefix("pageTurnWait p50="),
+            "翻页等待行缺少阶段名：\(line)"
+        )
+        expect(line.contains("p90="), "翻页等待行缺少 p90：\(line)")
+        expect(!line.contains("n/a"), "有样本不应写 n/a：\(line)")
     }
 
     private static func expect(_ condition: Bool, _ message: String) {

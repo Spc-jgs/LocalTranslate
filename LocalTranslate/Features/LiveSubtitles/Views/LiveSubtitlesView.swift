@@ -133,13 +133,34 @@ public struct LiveSubtitlesView: View {
             .padding(.vertical, 3)
             .background(Color.white.opacity(0.06), in: Capsule())
 
-            if viewModel.isRunning && viewModel.isCatchingUp {
-                Text("追赶中")
+            if viewModel.isRunning {
+                Text(
+                    LiveLagCaption.text(
+                        lag: viewModel.displayLag,
+                        catchingUp: viewModel.isCatchingUp
+                    )
+                )
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.orange.opacity(0.9))
+                    .foregroundColor(
+                        viewModel.isCatchingUp
+                            ? .orange.opacity(0.9)
+                            : .secondary
+                    )
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(Color.orange.opacity(0.1), in: Capsule())
+                    .background(
+                        (viewModel.isCatchingUp
+                            ? Color.orange.opacity(0.1)
+                            : Color.white.opacity(0.06)),
+                        in: Capsule()
+                    )
+                    .accessibilityLabel(
+                        "字幕落后语音 "
+                            + LiveLagCaption.text(
+                                lag: viewModel.displayLag,
+                                catchingUp: viewModel.isCatchingUp
+                            )
+                    )
             }
 
             // 源语言选择器 (macOS 原生菜单)
