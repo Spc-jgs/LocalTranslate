@@ -61,7 +61,7 @@ nonisolated enum UsageReferencePriceCatalog {
     /// 结果就是那 12 条记录一直挂着 NULL，表里显示成一个没有金额的破折号——
     /// 价格明明已经收录了。把这个号并进每个算费用的解析器的 parserVersion，
     /// 加一条单价就自动触发重扫，而不是靠人记得同时改四个数字。
-    static let revision = 1
+    static let revision = 2
 
     /// 算费用的解析器用它组合版本号：解析逻辑自身的版本 × 1000 + 价目修订号。
     /// 两者任一变化都让 `unchanged` 判定失配，从而重扫并覆盖旧事件。
@@ -120,13 +120,16 @@ nonisolated enum UsageReferencePriceCatalog {
         "gpt-5.6-sol": [Price(4, 0.4, 5, 20, validBefore: codexPromotionEnd)],
         "gpt-5.6-terra": [Price(2, 0.2, 2.5, 12, validBefore: codexPromotionEnd)],
         "gpt-5.6-luna": [Price(0.2, 0.02, 0.25, 1.2, validBefore: codexPromotionEnd)],
-        // GPT-6 Astra standard API list price checked on 2026-09-05:
-        // $10 input / $1 cached / $12.50 cache write / $50 output, no end date.
-        "gpt-6-astra": [Price(10, 1, 12.5, 50)]
+        // GPT-6 family standard API list prices checked on 2026-09-23 against
+        // developers.openai.com/api/docs/pricing.
+        "gpt-6-astra": [Price(10, 1, 12.5, 50)],
+        "gpt-6-sol": [Price(2, 0.2, 2.5, 10)],
+        "gpt-6-luna": [Price(0.1, 0.01, 0.125, 0.5)],
+        "gpt-6": [Price(2, 0.2, 2.5, 10)]
     ]
 
     /// OpenAI 的长上下文加价与 Anthropic/xAI 不同：超过阈值后输入与缓存 ×2、
-    /// 输出 ×1.5，而不是换一张单价表。gpt-5.6 与 gpt-6-astra 共用这个阈值。
+    /// 输出 ×1.5，而不是换一张单价表。gpt-5.6 与 gpt-6 全家族共用这个阈值。
     private static let codexLongContextThreshold: Int64 = 272_000
 
     // MARK: - Google (Gemini)

@@ -178,6 +178,12 @@ nonisolated struct CodexProvider: UsageProvider {
 
     static func displayCodexModelName(_ raw: String) -> String {
         switch raw {
+        case "gpt-6-astra":
+            return "GPT-6 Astra (Codex)"
+        case "gpt-6-sol":
+            return "GPT-6 Sol (Codex)"
+        case "gpt-6-luna":
+            return "GPT-6 Luna (Codex)"
         case "gpt-5.6-sol":
             return "GPT-5.6 Sol (Codex)"
         case "gpt-5.6-luna":

@@ -735,6 +735,18 @@ struct AIUsageProviderFixtureTests {
             usage: usage
         )
         expect(abs((luna ?? 0) - 0.032) < 0.000_001, "Codex prefix match picked the wrong rate")
+
+        let gpt6Sol = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-6-sol",
+            usage: usage
+        )
+        expect(abs((gpt6Sol ?? 0) - 0.3) < 0.000_001, "GPT-6 Sol price is wrong")
+
+        let gpt6Luna = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-6-luna",
+            usage: usage
+        )
+        expect(abs((gpt6Luna ?? 0) - 0.015) < 0.000_001, "GPT-6 Luna price is wrong")
     }
 
     /// 没有金额时必须能说出是哪一种「没有」：促销单价过期、来源按额度计费、
@@ -775,6 +787,22 @@ struct AIUsageProviderFixtureTests {
                 now: before
             ) == .priced,
             "GPT-6 Astra list price was not applied"
+        )
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gpt-6-sol",
+                provider: .openAI,
+                now: before
+            ) == .priced,
+            "GPT-6 Sol list price was not applied"
+        )
+        expect(
+            UsageReferencePriceCatalog.availability(
+                modelID: "gpt-6-luna",
+                provider: .openAI,
+                now: before
+            ) == .priced,
+            "GPT-6 Luna list price was not applied"
         )
         expect(
             UsageReferencePriceCatalog.availability(
@@ -884,6 +912,24 @@ struct AIUsageProviderFixtureTests {
         expect(
             abs((astraLong ?? 0) - 6.75) < 0.000_001,
             "GPT-6 Astra long-context surcharge is wrong"
+        )
+
+        // gpt-6-sol：短上下文 $2 / $0.2 / $10，超过 272K 输入与缓存 ×2、输出 ×1.5。
+        let gpt6SolShort = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-6-sol",
+            usage: TokenBreakdown(inputTokens: 100_000, outputTokens: 10_000)
+        )
+        expect(
+            abs((gpt6SolShort ?? 0) - 0.3) < 0.000_001,
+            "GPT-6 Sol short-context price is wrong"
+        )
+        let gpt6SolLong = UsageReferencePriceCatalog.estimateCodex(
+            modelID: "gpt-6-sol",
+            usage: TokenBreakdown(inputTokens: 300_000, outputTokens: 10_000)
+        )
+        expect(
+            abs((gpt6SolLong ?? 0) - 1.35) < 0.000_001,
+            "GPT-6 Sol long-context surcharge is wrong"
         )
     }
 
